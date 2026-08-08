@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="d" x1="14" y1="10" x2="50" y2="54" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff8f4d"/>
+      <stop offset=".45" stop-color="#ff6a1f"/>
+      <stop offset="1" stop-color="#b8410f"/>
+    </linearGradient>
+    <linearGradient id="f" x1="18" y1="32" x2="54" y2="32" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff"/>
+      <stop offset=".52" stop-color="#fff"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="m"><rect width="64" height="64" fill="url(#f)"/></mask>
+  </defs>
+
+  <rect width="64" height="64" rx="14" fill="#08090a"/>
+  <circle cx="32" cy="32" r="20" fill="url(#d)" mask="url(#m)"/>
+  <path d="M32 12A20 20 0 0 1 49.3 22L32 32Z" fill="#08090a" fill-opacity=".22" mask="url(#m)"/>
+
+  <g fill="#ff6a1f">
+    <circle cx="44.1" cy="20.3" r="1.2" opacity=".72"/>
+    <circle cx="47.6" cy="26.8" r="1.5" opacity=".58"/>
+    <circle cx="45.2" cy="33.4" r="1.1" opacity=".8"/>
+    <circle cx="49.8" cy="31.1" r="0.9" opacity=".46"/>
+    <circle cx="43.7" cy="40.2" r="1.4" opacity=".64"/>
+    <circle cx="48.4" cy="38.6" r="0.8" opacity=".4"/>
+    <circle cx="41.3" cy="45.1" r="1" opacity=".55"/>
+    <circle cx="46.9" cy="44.3" r="0.7" opacity=".34"/>
+    <circle cx="52.1" cy="35.7" r="0.7" opacity=".3"/>
+    <circle cx="40.5" cy="17.6" r="0.9" opacity=".5"/>
+    <circle cx="51.3" cy="28.2" r="0.6" opacity=".28"/>
+    <circle cx="37.8" cy="49.4" r="0.9" opacity=".42"/>
+    <circle cx="44.6" cy="49.8" r="0.6" opacity=".26"/>
+    <circle cx="53.4" cy="41.2" r="0.6" opacity=".22"/>
+  </g>
+</svg>

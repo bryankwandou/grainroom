@@ -1,0 +1,263 @@
+import type { LookParams } from "./looks";
+
+/**
+ * The tool catalogue.
+ *
+ * Names follow the vocabulary working photographers already use — Ambiance,
+ * Structure, Tonal Contrast — because that language is the industry's, not
+ * any one vendor's, and retyping it as something clever would only cost the
+ * user their existing muscle memory.
+ */
+
+export type NumericKey = {
+  [K in keyof LookParams]: LookParams[K] extends number ? K : never;
+}[keyof LookParams];
+
+export interface Slider {
+  key: NumericKey;
+  label: string;
+  min: number;
+  max: number;
+  /** Value the slider snaps back to on double-tap. */
+  neutral: number;
+  step?: number;
+  /** How the value reads out. Percent covers most, stops is exposure only. */
+  format?: "percent" | "stops" | "raw" | "degrees";
+  hint?: string;
+}
+
+export interface Tool {
+  id: string;
+  name: string;
+  group: ToolGroup;
+  blurb: string;
+  sliders: Slider[];
+}
+
+export type ToolGroup = "tune" | "detail" | "creative" | "geometry" | "portrait";
+
+export const GROUP_LABELS: Record<ToolGroup, string> = {
+  tune: "Tune",
+  detail: "Detail",
+  creative: "Looks",
+  geometry: "Frame",
+  portrait: "Portrait",
+};
+
+const pct = (
+  key: NumericKey,
+  label: string,
+  hint?: string,
+  range: [number, number] = [-1, 1]
+): Slider => ({
+  key,
+  label,
+  min: range[0],
+  max: range[1],
+  neutral: range[0] === 0 ? 0 : 0,
+  step: 0.01,
+  format: "percent",
+  hint,
+});
+
+export const TOOLS: Tool[] = [
+  {
+    id: "tune",
+    name: "Tune Image",
+    group: "tune",
+    blurb: "Overall brightness, contrast and colour weight.",
+    sliders: [
+      {
+        key: "exposure",
+        label: "Exposure",
+        min: -2,
+        max: 2,
+        neutral: 0,
+        step: 0.01,
+        format: "stops",
+        hint: "Measured in stops, the way a camera meters it.",
+      },
+      pct("contrast", "Contrast"),
+      pct("ambiance", "Ambiance", "Lifts midtones and colour together. Start here."),
+      pct("highlights", "Highlights", "Negative recovers detail from blown areas."),
+      pct("shadows", "Shadows", "Positive opens up the dark end."),
+      pct("whites", "Whites"),
+      pct("blacks", "Blacks"),
+      pct("saturation", "Saturation"),
+      pct("vibrance", "Vibrance", "Protects skin and already-vivid colour."),
+    ],
+  },
+  {
+    id: "white-balance",
+    name: "White Balance",
+    group: "tune",
+    blurb: "Correct a colour cast, or lean into one.",
+    sliders: [
+      pct("temperature", "Temperature", "Cool to warm."),
+      pct("tint", "Tint", "Magenta to green."),
+    ],
+  },
+  {
+    id: "curves",
+    name: "Curves",
+    group: "tune",
+    blurb: "Direct control over the tone response, per channel.",
+    sliders: [],
+  },
+  {
+    id: "hsl",
+    name: "Colour HSL",
+    group: "tune",
+    blurb: "Move one colour without disturbing its neighbours.",
+    sliders: [],
+  },
+  {
+    id: "details",
+    name: "Details",
+    group: "detail",
+    blurb: "Local contrast and edge definition.",
+    sliders: [
+      pct("structure", "Structure", "Local contrast. Texture without halos."),
+      pct("sharpen", "Sharpening", undefined, [0, 1]),
+    ],
+  },
+  {
+    id: "dehaze",
+    name: "Dehaze",
+    group: "detail",
+    blurb: "Cut atmospheric flatness out of distant subjects.",
+    sliders: [pct("dehaze", "Strength", undefined, [0, 1])],
+  },
+  {
+    id: "lens-blur",
+    name: "Lens Blur",
+    group: "detail",
+    blurb: "Soften the frame the way a wide aperture would.",
+    sliders: [
+      pct("lensBlur", "Amount", undefined, [0, 1]),
+      pct("blurRadius", "Radius", undefined, [0, 1]),
+    ],
+  },
+  {
+    id: "tonality",
+    name: "Tonality",
+    group: "creative",
+    blurb: "The matte, faded response of a darkroom print.",
+    sliders: [
+      pct("fade", "Fade", "Raises the black point.", [0, 1]),
+      pct("vignette", "Vignette"),
+      pct("vignetteFalloff", "Falloff", "Where the darkening begins.", [0, 1]),
+    ],
+  },
+  {
+    id: "grain",
+    name: "Grain",
+    group: "creative",
+    blurb: "Film grain, weighted toward the midtones like the real thing.",
+    sliders: [
+      pct("grain", "Amount", undefined, [0, 1]),
+      {
+        key: "grainSeed",
+        label: "Pattern",
+        min: 1,
+        max: 200,
+        neutral: 1,
+        step: 1,
+        format: "raw",
+        hint: "Reshuffles the grain without changing its density.",
+      },
+    ],
+  },
+  {
+    id: "glow",
+    name: "Glow",
+    group: "creative",
+    blurb: "How highlights bleed. Bloom is neutral, halation is film.",
+    sliders: [
+      pct("bloom", "Bloom", undefined, [0, 1]),
+      pct("halation", "Halation", "The red ring film leaves around hot highlights.", [
+        0, 1,
+      ]),
+    ],
+  },
+  {
+    id: "split-tone",
+    name: "Split Tone",
+    group: "creative",
+    blurb: "Different colour in the shadows than in the highlights.",
+    sliders: [
+      {
+        key: "shadowHue",
+        label: "Shadow hue",
+        min: 0,
+        max: 1,
+        neutral: 0.58,
+        step: 0.005,
+        format: "degrees",
+      },
+      pct("shadowSat", "Shadow strength", undefined, [0, 1]),
+      {
+        key: "highlightHue",
+        label: "Highlight hue",
+        min: 0,
+        max: 1,
+        neutral: 0.09,
+        step: 0.005,
+        format: "degrees",
+      },
+      pct("highlightSat", "Highlight strength", undefined, [0, 1]),
+    ],
+  },
+  {
+    id: "black-white",
+    name: "Black & White",
+    group: "creative",
+    blurb: "A channel mixer, so you can dodge by colour the way a filter does.",
+    sliders: [],
+  },
+];
+
+export const TOOLS_BY_ID = new Map(TOOLS.map((t) => [t.id, t]));
+
+/** Tools shipping after the current milestone. Listed so the gaps are visible. */
+export const ROADMAP_TOOLS: { name: string; group: ToolGroup; note: string }[] = [
+  { name: "Crop & Rotate", group: "geometry", note: "Ratio presets, straighten" },
+  { name: "Perspective", group: "geometry", note: "Keystone and tilt correction" },
+  { name: "Expand", group: "geometry", note: "Content-aware border fill" },
+  { name: "Selective", group: "tune", note: "Control points with falloff" },
+  { name: "Brush", group: "tune", note: "Painted dodge, burn and saturation" },
+  { name: "Healing", group: "detail", note: "Patch-based blemish removal" },
+  { name: "Cut Out", group: "portrait", note: "Subject isolation via Removix" },
+  { name: "Portrait", group: "portrait", note: "Skin smoothing, eye clarity" },
+  { name: "Double Exposure", group: "creative", note: "Layer blending modes" },
+  { name: "Text", group: "creative", note: "Typography overlays" },
+  { name: "Frames", group: "geometry", note: "Print borders" },
+  { name: "RAW Develop", group: "tune", note: "Demosaic in WASM" },
+];
+
+/* ------------------------------------------------------------------ */
+
+export function formatValue(slider: Slider, value: number): string {
+  switch (slider.format) {
+    case "stops":
+      return `${value > 0 ? "+" : ""}${value.toFixed(2)}`;
+    case "degrees":
+      return `${Math.round(value * 360)}°`;
+    case "raw":
+      return String(Math.round(value));
+    default: {
+      const n = Math.round(value * 100);
+      return `${n > 0 ? "+" : ""}${n}`;
+    }
+  }
+}
+
+/** Sliders the user has actually moved, for the stack summary. */
+export function activeSliders(
+  tool: Tool,
+  params: LookParams
+): { slider: Slider; value: number }[] {
+  return tool.sliders
+    .map((slider) => ({ slider, value: params[slider.key] as number }))
+    .filter(({ slider, value }) => Math.abs(value - slider.neutral) > 0.001);
+}
