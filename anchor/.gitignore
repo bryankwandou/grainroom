@@ -1,0 +1,13 @@
+# Build output. Also where Anchor keeps the program keypair, which must
+# never be committed — anyone holding it controls program upgrades.
+target/
+**/*.rs.bk
+.anchor/
+
+# Wallets, in any of the shapes they turn up in
+*keypair*.json
+id.json
+*.key
+.env
+.env.*
+!.env.example
