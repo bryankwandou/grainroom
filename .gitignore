@@ -41,3 +41,12 @@ yarn-error.log*
 next-env.d.ts
 
 .vercel
+
+# Anchor build artefacts
+anchor/target/
+anchor/.anchor/
+
+# Keypairs. Never commit a signer.
+*-keypair.json
+*.pem
+id.json

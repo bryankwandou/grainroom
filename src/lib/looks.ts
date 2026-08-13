@@ -228,7 +228,9 @@ export function canonicalise(params: LookParams): string {
 
 export async function hashParams(params: LookParams): Promise<string> {
   const bytes = new TextEncoder().encode(canonicalise(params));
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  // TextEncoder yields Uint8Array<ArrayBufferLike>, which recent @types/node
+  // no longer treats as a BufferSource even though it always is one at runtime.
+  const digest = await crypto.subtle.digest("SHA-256", bytes as BufferSource);
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
