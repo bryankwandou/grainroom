@@ -6,6 +6,12 @@ resolver = "2"
 overflow-checks = true
 lto = "fat"
 codegen-units = 1
+# Deploy rent is charged per byte of the loaded binary, so size is a real
+# cost here rather than a nicety. Optimising for it costs nothing measurable
+# on a program whose hot path is a bounded eight-step loop.
+opt-level = "z"
+panic = "abort"
+strip = true
 
 [profile.release.build-override]
 opt-level = 3

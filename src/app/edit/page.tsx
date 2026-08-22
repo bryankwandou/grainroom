@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Editor from "@/components/editor/Editor";
+import { WalletBridge } from "@/components/solana/WalletBridge";
 
 export const metadata: Metadata = {
   title: "Editor",
@@ -8,5 +9,9 @@ export const metadata: Metadata = {
 };
 
 export default function EditPage() {
-  return <Editor />;
+  return (
+    <WalletBridge>
+      <Editor />
+    </WalletBridge>
+  );
 }

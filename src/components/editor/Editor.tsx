@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Mark } from "@/components/Logo";
 import { useEditor } from "./useEditor";
+import { ChainPanel } from "./ChainPanel";
 import {
   TOOLS,
   TOOLS_BY_ID,
@@ -21,7 +22,12 @@ export default function Editor() {
   const ed = useEditor();
   const [activeToolId, setActiveToolId] = useState<string>("tune");
   const [sliderIndex, setSliderIndex] = useState(0);
-  const [panel, setPanel] = useState<"tools" | "stack" | "export">("tools");
+  const [panel, setPanel] = useState<"tools" | "stack" | "chain" | "export">(
+    "tools"
+  );
+  // The Look a shared link arrived from. Registering while this is set
+  // records a derivative rather than a fresh claim, so the trail survives.
+  const [parentId, setParentId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -130,6 +136,21 @@ export default function Editor() {
     const file = e.dataTransfer.files?.[0];
     if (file) ed.loadFile(file);
   };
+
+  // A Look arriving in the address bar is applied once, then wiped from the
+  // URL so a later reload does not undo whatever was done since.
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get("look");
+    if (!code) return;
+    const look = ed.loadLook(code);
+    if (look) {
+      setParentId(look.id);
+      notify(`Opened "${look.name}"`);
+    }
+    window.history.replaceState({}, "", window.location.pathname);
+    // Deliberately mount-only: re-running would reapply the same recipe.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const grouped = useMemo(() => {
     const map = new Map<ToolGroup, Tool[]>();
@@ -285,7 +306,7 @@ export default function Editor() {
         {/* panel */}
         <aside className="flex w-full shrink-0 flex-col border-t border-ink-700 bg-ink-900 lg:w-[340px] lg:border-l lg:border-t-0">
           <nav className="flex shrink-0 border-b border-ink-700">
-            {(["tools", "stack", "export"] as const).map((p) => (
+            {(["tools", "stack", "chain", "export"] as const).map((p) => (
               <button
                 key={p}
                 onClick={() => setPanel(p)}
@@ -295,7 +316,7 @@ export default function Editor() {
                     : "border-transparent text-paper-400 hover:text-paper-200"
                 }`}
               >
-                {p === "stack" ? "Stack" : p}
+                {p}
               </button>
             ))}
           </nav>
@@ -333,8 +354,18 @@ export default function Editor() {
                   const text = await navigator.clipboard.readText();
                   const code = text.includes("look=") ? text.split("look=")[1] : text;
                   const look = ed.loadLook(code);
-                  if (look) notify(`Applied "${look.name}"`);
+                  if (look) {
+                    setParentId(look.id);
+                    notify(`Applied "${look.name}"`);
+                  }
                 }}
+              />
+            )}
+            {panel === "chain" && (
+              <ChainPanel
+                params={ed.params}
+                parentId={parentId}
+                onNotify={notify}
               />
             )}
             {panel === "export" && (

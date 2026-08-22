@@ -317,3 +317,47 @@ export async function fetchLineage(
 export function explorerUrl(address: PublicKey | string): string {
   return `https://explorer.solana.com/address/${address.toString()}?cluster=devnet`;
 }
+
+/**
+ * Sweeps royalties out of a Look record and into its author's wallet.
+ *
+ * Rent stays behind, so this can be called repeatedly without ever
+ * destroying the authorship record it is attached to.
+ */
+export async function buildWithdrawIx(args: {
+  lookHashHex: string;
+  author: PublicKey;
+}): Promise<TransactionInstruction> {
+  const [look] = lookPda(args.lookHashHex);
+
+  return new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: look, isSigner: false, isWritable: true },
+      { pubkey: args.author, isSigner: true, isWritable: true },
+    ],
+    data: concat(await discriminator("withdraw")),
+  });
+}
+
+/** Lamports held above the rent floor, which is what `withdraw` releases. */
+export async function claimableLamports(
+  connection: Connection,
+  lookHashHex: string
+): Promise<bigint> {
+  const [address] = lookPda(lookHashHex);
+  const info = await connection.getAccountInfo(address);
+  if (!info) return 0n;
+  const floor = await connection.getMinimumBalanceForRentExemption(
+    info.data.length
+  );
+  const excess = BigInt(info.lamports) - BigInt(floor);
+  return excess > 0n ? excess : 0n;
+}
+
+export function formatSol(lamports: bigint): string {
+  const sol = Number(lamports) / 1_000_000_000;
+  if (sol === 0) return "0";
+  if (sol < 0.001) return sol.toExponential(2);
+  return sol.toFixed(sol < 1 ? 4 : 3).replace(/0+$/, "").replace(/\.$/, "");
+}
