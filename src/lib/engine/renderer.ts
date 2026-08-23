@@ -1,5 +1,12 @@
 import { VERT, FRAG_ADJUST, FRAG_BLUR, FRAG_COMPOSITE } from "./shaders";
-import { buildCurveLUT, type LookParams } from "../looks";
+import {
+  MAX_STRAIGHTEN_RAD,
+  MAX_SELECTIVE_POINTS,
+  buildCurveLUT,
+  expandFactor,
+  framedSize,
+  type LookParams,
+} from "../looks";
 
 /**
  * WebGL2 renderer for the Grainroom pipeline.
@@ -150,8 +157,17 @@ export class GrainroomRenderer {
   }
 
   /**
-   * Renders at the source image's native resolution and encodes it.
-   * The preview canvas is restored afterwards by the next render() call.
+   * Pixel size of the finished frame, once crop and rotation are taken into
+   * account. The canvas is fitted to this rather than to the source, so a
+   * rotated portrait does not sit in a landscape box with bars either side.
+   */
+  outputSize(params: LookParams): { w: number; h: number } {
+    return framedSize(params, this.imageWidth, this.imageHeight);
+  }
+
+  /**
+   * Renders at the framed resolution and encodes it. The preview canvas is
+   * restored afterwards by the next render() call.
    */
   async exportBlob(
     params: LookParams,
@@ -159,8 +175,7 @@ export class GrainroomRenderer {
   ): Promise<Blob> {
     const { type = "image/jpeg", quality = 0.95, maxEdge } = opts;
 
-    let w = this.imageWidth;
-    let h = this.imageHeight;
+    let { w, h } = this.outputSize(params);
     if (maxEdge && Math.max(w, h) > maxEdge) {
       const s = maxEdge / Math.max(w, h);
       w = Math.round(w * s);
@@ -246,6 +261,38 @@ export class GrainroomRenderer {
     gl.uniform4f(u("uSplit"), p.shadowHue, p.shadowSat, p.highlightHue, p.highlightSat);
     gl.uniform4f(u("uBW"), p.bwMix[0], p.bwMix[1], p.bwMix[2], p.bw ? 1 : 0);
 
+    // Framing. The oriented size is the source with its axes swapped on an
+    // odd number of quarter turns, which is what the crop rect is relative to.
+    const turned = p.quarterTurns % 2 === 1;
+    gl.uniform4f(u("uCrop"), p.cropX, p.cropY, p.cropW, p.cropH);
+    gl.uniform2f(
+      u("uOriented"),
+      turned ? this.imageHeight : this.imageWidth,
+      turned ? this.imageWidth : this.imageHeight
+    );
+    gl.uniform2f(u("uSource"), this.imageWidth, this.imageHeight);
+    gl.uniform1f(u("uQuarter"), p.quarterTurns);
+    gl.uniform1f(u("uAngle"), p.straighten * MAX_STRAIGHTEN_RAD);
+    gl.uniform1f(u("uExpand"), expandFactor(p));
+    gl.uniform2f(u("uFlip"), p.flipH ? -1 : 1, p.flipV ? -1 : 1);
+    // Half a unit of keystone at full slider is about as far as the warp can
+    // go before the stretched edge starts to read as damage rather than fix.
+    gl.uniform2f(u("uKeystone"), p.perspectiveH * 0.5, p.perspectiveV * 0.5);
+
+    // Selective points. The arrays are always uploaded at full length so a
+    // removed point cannot leave a stale entry behind the count.
+    const count = Math.min(p.points.length, MAX_SELECTIVE_POINTS);
+    const a = new Float32Array(MAX_SELECTIVE_POINTS * 4);
+    const b = new Float32Array(MAX_SELECTIVE_POINTS * 4);
+    for (let i = 0; i < count; i++) {
+      const pt = p.points[i];
+      a.set([pt.x, pt.y, pt.size, 0], i * 4);
+      b.set([pt.brightness, pt.contrast, pt.saturation, 0], i * 4);
+    }
+    gl.uniform1i(u("uPointCount"), count);
+    gl.uniform4fv(u("uPointA"), a);
+    gl.uniform4fv(u("uPointB"), b);
+
     gl.uniform1fv(u("uHueShift"), new Float32Array(p.hueShift));
     gl.uniform1fv(u("uSatShift"), new Float32Array(p.satShift));
     gl.uniform1fv(u("uLumShift"), new Float32Array(p.lumShift));
@@ -261,6 +308,8 @@ export class GrainroomRenderer {
     gl.uniform2f(u("uResolution"), w, h);
     gl.uniform1f(u("uSeed"), p.grainSeed);
     gl.uniform1f(u("uVignetteFalloff"), p.vignetteFalloff);
+    gl.uniform2f(u("uBorder"), p.borderWidth, p.borderTone);
+    gl.uniform3f(u("uPortrait"), p.skinSmooth, p.faceSpotlight, p.eyeClarity);
   }
 }
 

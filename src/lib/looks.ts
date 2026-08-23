@@ -56,6 +56,40 @@ export interface LookParams {
   satShift: number[];
   lumShift: number[];
 
+  // Framing. The crop rect lives in the oriented image, so turning a photo
+  // does not silently move the crop somewhere else.
+  cropX: number;         // 0 .. 1
+  cropY: number;         // 0 .. 1
+  cropW: number;         // 0 .. 1
+  cropH: number;         // 0 .. 1
+  quarterTurns: number;  // 0 .. 3, clockwise
+  straighten: number;    // -1 .. 1, maps to +/- 15 degrees
+  flipH: boolean;
+  flipV: boolean;
+
+  // Expand. Grows the frame past the edge of the photo and fills what is
+  // outside by reflecting the border back in.
+  expand: number;        // 0 .. 1, up to half again as wide
+
+  // Perspective. Keystone correction for the leaning-building problem, one
+  // axis each. The frame zooms in to stay filled rather than showing wedges.
+  perspectiveH: number;  // -1 .. 1
+  perspectiveV: number;  // -1 .. 1
+
+  // Portrait. Gated on skin tone rather than on a detected face: no model
+  // ships with the app, and a tone gate is honest about what it can do.
+  skinSmooth: number;    // 0 .. 1
+  faceSpotlight: number; // 0 .. 1
+  eyeClarity: number;    // 0 .. 1
+
+  // Print border. Laid over the frame rather than added around it, the way a
+  // darkroom easel masks the edges of the paper.
+  borderWidth: number;   // 0 .. 1, up to a tenth of the short edge
+  borderTone: number;    // 0 black .. 1 white
+
+  // Selective control points, anchored to the photo rather than to the frame
+  points: SelectivePoint[];
+
   // Curves, control points in 0..1 space
   curveRGB: CurvePoint[];
   curveR: CurvePoint[];
@@ -67,6 +101,25 @@ export interface CurvePoint {
   x: number;
   y: number;
 }
+
+/**
+ * One selective adjustment.
+ *
+ * The position is in source-image coordinates, not frame coordinates, so
+ * cropping or turning the photo afterwards leaves the point on the same
+ * eyebrow or the same patch of sky it was put on.
+ */
+export interface SelectivePoint {
+  x: number;          // 0 .. 1 across the source
+  y: number;          // 0 .. 1 down the source
+  size: number;       // radius as a fraction of the frame
+  brightness: number; // -1 .. 1
+  contrast: number;   // -1 .. 1
+  saturation: number; // -1 .. 1
+}
+
+/** The shader carries this many; more would cost a uniform array resize. */
+export const MAX_SELECTIVE_POINTS = 6;
 
 export const HSL_BANDS = [
   "Red",
@@ -118,6 +171,23 @@ export function defaultParams(): LookParams {
     hueShift: new Array(8).fill(0),
     satShift: new Array(8).fill(0),
     lumShift: new Array(8).fill(0),
+    cropX: 0,
+    cropY: 0,
+    cropW: 1,
+    cropH: 1,
+    quarterTurns: 0,
+    straighten: 0,
+    flipH: false,
+    flipV: false,
+    expand: 0,
+    perspectiveH: 0,
+    perspectiveV: 0,
+    skinSmooth: 0,
+    faceSpotlight: 0,
+    eyeClarity: 0,
+    borderWidth: 0,
+    borderTone: 1,
+    points: [],
     curveRGB: [...LINEAR_CURVE],
     curveR: [...LINEAR_CURVE],
     curveG: [...LINEAR_CURVE],
@@ -277,4 +347,223 @@ export function decodeLook(encoded: string): LookRecipe {
 /** True when the Look would leave the image untouched. */
 export function isNeutral(params: LookParams): boolean {
   return canonicalise(params) === canonicalise(defaultParams());
+}
+
+/* ------------------------------------------------------------------ */
+/* Framing                                                             */
+/* ------------------------------------------------------------------ */
+
+/** Straighten runs to fifteen degrees each way, which covers a bad horizon. */
+export const MAX_STRAIGHTEN_RAD = (15 * Math.PI) / 180;
+
+/**
+ * Pixel size of the finished frame.
+ *
+ * Crop and rotation change the shape of the output, so this is what the
+ * canvas has to be fitted to and what an export at full quality should
+ * produce. Rounding up by half a pixel would show as a transparent hairline
+ * on one edge, so the result is floored and never allowed below one pixel.
+ */
+export function framedSize(
+  params: LookParams,
+  sourceW: number,
+  sourceH: number
+): { w: number; h: number } {
+  const turned = params.quarterTurns % 2 === 1;
+  const orientedW = turned ? sourceH : sourceW;
+  const orientedH = turned ? sourceW : sourceH;
+  const grow = expandFactor(params);
+  return {
+    w: Math.max(1, Math.floor(orientedW * params.cropW * grow)),
+    h: Math.max(1, Math.floor(orientedH * params.cropH * grow)),
+  };
+}
+
+/** How much larger than the crop the finished frame is. 1 means no expansion. */
+export function expandFactor(params: LookParams): number {
+  return 1 + params.expand * 0.5;
+}
+
+/** Common framing ratios, plus the two that depend on the photo in hand. */
+export const CROP_RATIOS: { label: string; ratio: number | null }[] = [
+  { label: "Free", ratio: null },
+  { label: "Original", ratio: 0 },
+  { label: "1:1", ratio: 1 },
+  { label: "4:5", ratio: 4 / 5 },
+  { label: "5:4", ratio: 5 / 4 },
+  { label: "3:2", ratio: 3 / 2 },
+  { label: "2:3", ratio: 2 / 3 },
+  { label: "16:9", ratio: 16 / 9 },
+  { label: "9:16", ratio: 9 / 16 },
+];
+
+/**
+ * Largest crop of the requested ratio that fits, centred on what is already
+ * framed. Snapping to the centre rather than a corner keeps the subject in
+ * roughly the same place when someone tries several ratios in a row.
+ */
+export function fitCropToRatio(
+  params: LookParams,
+  ratio: number,
+  sourceW: number,
+  sourceH: number
+): Pick<LookParams, "cropX" | "cropY" | "cropW" | "cropH"> {
+  const turned = params.quarterTurns % 2 === 1;
+  const orientedW = turned ? sourceH : sourceW;
+  const orientedH = turned ? sourceW : sourceH;
+
+  // Work in pixels: a ratio means nothing in the normalised space alone.
+  let w = orientedW;
+  let h = w / ratio;
+  if (h > orientedH) {
+    h = orientedH;
+    w = h * ratio;
+  }
+
+  const cw = w / orientedW;
+  const ch = h / orientedH;
+  const cx = params.cropX + params.cropW / 2;
+  const cy = params.cropY + params.cropH / 2;
+
+  return {
+    cropW: cw,
+    cropH: ch,
+    cropX: Math.min(Math.max(cx - cw / 2, 0), 1 - cw),
+    cropY: Math.min(Math.max(cy - ch / 2, 0), 1 - ch),
+  };
+}
+
+/**
+ * Frame coordinates to source coordinates, both 0..1.
+ *
+ * This is the same walk the shader's sourceUV() makes, kept in step with it
+ * by hand. It exists so that tapping the canvas can land a selective point on
+ * the pixel under the finger even when the photo is cropped, turned,
+ * straightened or keystoned — the tap is in frame space, the point is stored
+ * in source space, and only this function knows how to cross between them.
+ */
+export function frameToSource(
+  p: LookParams,
+  uv: { x: number; y: number },
+  sourceW: number,
+  sourceH: number
+): { x: number; y: number } {
+  const turned = p.quarterTurns % 2 === 1;
+  const orientedW = turned ? sourceH : sourceW;
+  const orientedH = turned ? sourceW : sourceH;
+
+  // Expansion grows outward from the middle of the crop, not the middle of
+  // the photo, or moving the crop would drag the new border around with it.
+  const grow = expandFactor(p);
+  const cx = p.cropX + p.cropW / 2;
+  const cy = p.cropY + p.cropH / 2;
+  let x = (cx + (uv.x - 0.5) * p.cropW * grow - 0.5) * orientedW;
+  let y = (cy + (uv.y - 0.5) * p.cropH * grow - 0.5) * orientedH;
+
+  const turns = ((p.quarterTurns % 4) + 4) % 4;
+  if (turns === 3) [x, y] = [-y, x];
+  else if (turns === 2) [x, y] = [-x, -y];
+  else if (turns === 1) [x, y] = [y, -x];
+
+  const angle = p.straighten * MAX_STRAIGHTEN_RAD;
+  const ca = Math.abs(Math.cos(angle));
+  const sa = Math.abs(Math.sin(angle));
+  const zoom = Math.max(
+    (sourceW * ca + sourceH * sa) / sourceW,
+    (sourceW * sa + sourceH * ca) / sourceH
+  );
+  const c = Math.cos(-angle);
+  const s = Math.sin(-angle);
+  [x, y] = [(x * c - y * s) / zoom, (x * s + y * c) / zoom];
+
+  const kx = p.perspectiveH * 0.5;
+  const ky = p.perspectiveV * 0.5;
+  if (Math.abs(kx) > 0.001 || Math.abs(ky) > 0.001) {
+    let nx = (x / sourceW) * (1 - (Math.abs(kx) + Math.abs(ky)) * 0.5);
+    let ny = (y / sourceH) * (1 - (Math.abs(kx) + Math.abs(ky)) * 0.5);
+    const w = 1 + kx * nx + ky * ny;
+    nx /= w;
+    ny /= w;
+    x = nx * sourceW;
+    y = ny * sourceH;
+  }
+
+  return {
+    x: (x / sourceW) * (p.flipH ? -1 : 1) + 0.5,
+    y: (y / sourceH) * (p.flipV ? -1 : 1) + 0.5,
+  };
+}
+
+/**
+ * The other direction: where a point on the photo currently sits in the
+ * frame. Used to draw the selective markers over the canvas. Values outside
+ * 0..1 mean the point has been cropped out of view.
+ */
+export function sourceToFrame(
+  p: LookParams,
+  src: { x: number; y: number },
+  sourceW: number,
+  sourceH: number
+): { x: number; y: number } {
+  let nx = (src.x - 0.5) * (p.flipH ? -1 : 1);
+  let ny = (src.y - 0.5) * (p.flipV ? -1 : 1);
+
+  const kx = p.perspectiveH * 0.5;
+  const ky = p.perspectiveV * 0.5;
+  if (Math.abs(kx) > 0.001 || Math.abs(ky) > 0.001) {
+    const w = 1 - (kx * nx + ky * ny);
+    const scale = 1 - (Math.abs(kx) + Math.abs(ky)) * 0.5;
+    nx = nx / w / scale;
+    ny = ny / w / scale;
+  }
+
+  let x = nx * sourceW;
+  let y = ny * sourceH;
+
+  const angle = p.straighten * MAX_STRAIGHTEN_RAD;
+  const ca = Math.abs(Math.cos(angle));
+  const sa = Math.abs(Math.sin(angle));
+  const zoom = Math.max(
+    (sourceW * ca + sourceH * sa) / sourceW,
+    (sourceW * sa + sourceH * ca) / sourceH
+  );
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  x *= zoom;
+  y *= zoom;
+  [x, y] = [x * c - y * s, x * s + y * c];
+
+  const turns = ((p.quarterTurns % 4) + 4) % 4;
+  if (turns === 1) [x, y] = [-y, x];
+  else if (turns === 2) [x, y] = [-x, -y];
+  else if (turns === 3) [x, y] = [y, -x];
+
+  const turned = turns % 2 === 1;
+  const orientedW = turned ? sourceH : sourceW;
+  const orientedH = turned ? sourceW : sourceH;
+
+  const grow = expandFactor(p);
+  const cx = p.cropX + p.cropW / 2;
+  const cy = p.cropY + p.cropH / 2;
+  return {
+    x: (x / orientedW + 0.5 - cx) / (p.cropW * grow) + 0.5,
+    y: (y / orientedH + 0.5 - cy) / (p.cropH * grow) + 0.5,
+  };
+}
+
+/** True when the framing controls would leave the photo exactly as shot. */
+export function isUnframed(p: LookParams): boolean {
+  return (
+    p.cropX === 0 &&
+    p.cropY === 0 &&
+    p.cropW === 1 &&
+    p.cropH === 1 &&
+    p.quarterTurns === 0 &&
+    p.straighten === 0 &&
+    !p.flipH &&
+    !p.flipV &&
+    p.perspectiveH === 0 &&
+    p.perspectiveV === 0 &&
+    p.expand === 0
+  );
 }

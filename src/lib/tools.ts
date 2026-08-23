@@ -22,7 +22,7 @@ export interface Slider {
   neutral: number;
   step?: number;
   /** How the value reads out. Percent covers most, stops is exposure only. */
-  format?: "percent" | "stops" | "raw" | "degrees";
+  format?: "percent" | "stops" | "raw" | "degrees" | "tilt";
   hint?: string;
 }
 
@@ -109,6 +109,13 @@ export const TOOLS: Tool[] = [
     name: "Colour HSL",
     group: "tune",
     blurb: "Move one colour without disturbing its neighbours.",
+    sliders: [],
+  },
+  {
+    id: "selective",
+    name: "Selective",
+    group: "tune",
+    blurb: "Drop a point on one part of the photo and adjust only that part.",
     sliders: [],
   },
   {
@@ -209,6 +216,79 @@ export const TOOLS: Tool[] = [
     ],
   },
   {
+    id: "crop",
+    name: "Crop & Rotate",
+    group: "geometry",
+    blurb: "Reframe, straighten a horizon, turn or mirror the photo.",
+    sliders: [
+      {
+        key: "straighten",
+        label: "Straighten",
+        min: -1,
+        max: 1,
+        neutral: 0,
+        step: 0.002,
+        format: "tilt",
+        hint: "The frame zooms in just enough to keep the corners filled.",
+      },
+    ],
+  },
+  {
+    id: "expand",
+    name: "Expand",
+    group: "geometry",
+    blurb: "Open the frame past the edge of the photo and fill what is outside.",
+    sliders: [
+      pct(
+        "expand",
+        "Amount",
+        "The border is the edge of the picture reflected back in.",
+        [0, 1]
+      ),
+    ],
+  },
+  {
+    id: "portrait",
+    name: "Portrait",
+    group: "portrait",
+    blurb: "Skin, eyes and a lift in the middle of the frame.",
+    sliders: [
+      pct("skinSmooth", "Skin smoothing", "Held to skin tones, not the whole frame.", [0, 1]),
+      pct("eyeClarity", "Eye clarity", "Sharpens the dark detail skin does not have.", [0, 1]),
+      pct("faceSpotlight", "Spotlight", "Lifts the centre and settles the corners.", [0, 1]),
+    ],
+  },
+  {
+    id: "frames",
+    name: "Frames",
+    group: "geometry",
+    blurb: "A printed border, masked into the frame the way an easel does it.",
+    sliders: [
+      pct("borderWidth", "Width", undefined, [0, 1]),
+      {
+        key: "borderTone",
+        label: "Tone",
+        min: 0,
+        max: 1,
+        // Paper white is where this starts, so that is where "unchanged" is.
+        neutral: 1,
+        step: 0.01,
+        format: "percent",
+        hint: "Black at the bottom, paper white at the top.",
+      },
+    ],
+  },
+  {
+    id: "perspective",
+    name: "Perspective",
+    group: "geometry",
+    blurb: "Stand up a building that leans because the camera was tilted.",
+    sliders: [
+      pct("perspectiveV", "Tilt", "Verticals that converge upward or down."),
+      pct("perspectiveH", "Skew", "The same correction across the frame."),
+    ],
+  },
+  {
     id: "black-white",
     name: "Black & White",
     group: "creative",
@@ -221,17 +301,11 @@ export const TOOLS_BY_ID = new Map(TOOLS.map((t) => [t.id, t]));
 
 /** Tools shipping after the current milestone. Listed so the gaps are visible. */
 export const ROADMAP_TOOLS: { name: string; group: ToolGroup; note: string }[] = [
-  { name: "Crop & Rotate", group: "geometry", note: "Ratio presets, straighten" },
-  { name: "Perspective", group: "geometry", note: "Keystone and tilt correction" },
-  { name: "Expand", group: "geometry", note: "Content-aware border fill" },
-  { name: "Selective", group: "tune", note: "Control points with falloff" },
   { name: "Brush", group: "tune", note: "Painted dodge, burn and saturation" },
   { name: "Healing", group: "detail", note: "Patch-based blemish removal" },
   { name: "Cut Out", group: "portrait", note: "Subject isolation via Removix" },
-  { name: "Portrait", group: "portrait", note: "Skin smoothing, eye clarity" },
   { name: "Double Exposure", group: "creative", note: "Layer blending modes" },
   { name: "Text", group: "creative", note: "Typography overlays" },
-  { name: "Frames", group: "geometry", note: "Print borders" },
   { name: "RAW Develop", group: "tune", note: "Demosaic in WASM" },
 ];
 
@@ -243,6 +317,10 @@ export function formatValue(slider: Slider, value: number): string {
       return `${value > 0 ? "+" : ""}${value.toFixed(2)}`;
     case "degrees":
       return `${Math.round(value * 360)}°`;
+    // Straighten runs -1..1 over fifteen degrees each way; showing the raw
+    // fraction would mean nothing to anyone levelling a horizon.
+    case "tilt":
+      return `${value > 0 ? "+" : ""}${(value * 15).toFixed(1)}°`;
     case "raw":
       return String(Math.round(value));
     default: {

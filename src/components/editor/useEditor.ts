@@ -46,6 +46,10 @@ export function useEditor() {
   const [cursor, setCursor] = useState(-1);
   const [imageName, setImageName] = useState<string | null>(null);
   const [imageSize, setImageSize] = useState<{ w: number; h: number } | null>(null);
+  const [displaySize, setDisplaySize] = useState<{ w: number; h: number } | null>(
+    null
+  );
+  const displayRef = useRef<{ w: number; h: number } | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -68,14 +72,28 @@ export function useEditor() {
     const boxH = parent.clientHeight;
     if (boxW === 0 || boxH === 0) return;
 
-    const scale = Math.min(boxW / r.width, boxH / r.height);
-    const cssW = Math.max(1, Math.floor(r.width * scale));
-    const cssH = Math.max(1, Math.floor(r.height * scale));
+    const active = showOriginalRef.current ? defaultParams() : paramsRef.current;
+
+    // Fit the framed result, not the source: a cropped or turned photo has to
+    // sit in a box its own shape, or the preview lies about what exports.
+    const out = r.outputSize(active);
+    const scale = Math.min(boxW / out.w, boxH / out.h);
+    const cssW = Math.max(1, Math.floor(out.w * scale));
+    const cssH = Math.max(1, Math.floor(out.h * scale));
 
     canvas.style.width = `${cssW}px`;
     canvas.style.height = `${cssH}px`;
 
-    const active = showOriginalRef.current ? defaultParams() : paramsRef.current;
+    // Overlays (the selective markers) have to sit exactly on the picture, so
+    // the display size is published. Guarded against re-render churn: this
+    // runs on every animation frame and setState on an unchanged value would
+    // otherwise keep the tree busy for no reason.
+    const shown = displayRef.current;
+    if (!shown || shown.w !== cssW || shown.h !== cssH) {
+      displayRef.current = { w: cssW, h: cssH };
+      setDisplaySize({ w: cssW, h: cssH });
+    }
+
     r.render(active, cssW * dpr, cssH * dpr);
   }, []);
 
@@ -195,6 +213,21 @@ export function useEditor() {
     [applyParams]
   );
 
+  /**
+   * Several keys at once, against the live parameters rather than whatever
+   * the last render captured. Framing moves two or three values together and
+   * a stale copy would drop whichever one changed a moment earlier.
+   */
+  const patchParams = useCallback(
+    (
+      patch: Partial<LookParams>,
+      options: { commit?: boolean; label?: string } = {}
+    ) => {
+      applyParams({ ...paramsRef.current, ...patch }, options);
+    },
+    [applyParams]
+  );
+
   const commit = useCallback(
     (label: string) => {
       applyParams(paramsRef.current, { commit: true, label });
@@ -287,6 +320,7 @@ export function useEditor() {
     attachCanvas,
     params,
     setParam,
+    patchParams,
     applyParams,
     commit,
     history,
@@ -304,6 +338,7 @@ export function useEditor() {
     loadLook,
     imageName,
     imageSize,
+    displaySize,
     isReady,
     error,
     clearError: () => setError(null),

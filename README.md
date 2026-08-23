@@ -67,6 +67,13 @@ computing four.
 Render targets use `RGBA16F` where `EXT_color_buffer_float` is available, since
 eight bits per channel bands visibly once you start pushing tone curves.
 
+GLSL compiles at runtime, so a typo in a shader survives both `tsc` and
+`next build` and then breaks the editor for everyone at once. `npm run
+check:shaders` drives a real WebGL2 context in headless Chrome, compiles and
+links all three programs against the same sources the app imports, and lists
+the uniforms that survived linking — a uniform the renderer sets but the
+linker dropped looks exactly like a tool that quietly does nothing.
+
 ### The Look format
 
 `src/lib/looks.ts`. Parameters are serialised with keys sorted and floats fixed
@@ -90,16 +97,30 @@ Encoded base64url, a Look fits comfortably in a URL or a QR code.
 
 ## What runs today
 
-Tune Image, White Balance, Details, Dehaze, Lens Blur, Tonality, Grain, Glow,
-Split Tone, Colour HSL, Black & White, and the curve engine. Export to JPEG, PNG
-or WebP at full resolution or a capped long edge.
+Tune Image, White Balance, Selective, Details, Dehaze, Lens Blur, Tonality,
+Grain, Glow, Split Tone, Colour HSL, Black & White, Crop & Rotate, Expand,
+Perspective, Portrait, Frames, and the curve engine. Export to JPEG, PNG or
+WebP at full resolution or a capped long edge.
+
+Geometry — crop, quarter turns, straighten, keystone, expand — is folded into
+the first pass rather than run as a stage of its own, so the blur, grain and
+vignette further down the chain all land relative to the frame the viewer
+actually gets. Expand fills what it opens up by reflecting the border back in.
+
+Selective points are stored in source coordinates, not frame coordinates, so
+cropping or turning the photo afterwards leaves each point on the feature it
+was placed on. Each one holds to tones like the one underneath it, which is
+what stops brightening a face from dragging the wall behind it along too.
 
 ## What does not yet
 
-Crop and Rotate, Perspective, Expand, Selective control points, Brush, Healing,
-Cut Out, Portrait, Double Exposure, Text, Frames, RAW Develop. These are listed
+Brush, Healing, Cut Out, Double Exposure, Text, RAW Develop. These are listed
 in the editor's tool panel rather than hidden, because a roadmap you cannot see
 is a marketing document.
+
+Four of those six are painted or need a second image, and neither survives the
+rule that a Look is a small, portable, deterministic recipe. They will arrive
+alongside a way to carry a mask, not by quietly bloating the format.
 
 Cut Out will call the background removal service already running in
 [Removix](https://github.com/bryankwandou/removix-ai).
@@ -110,6 +131,10 @@ The canvas responds to a two-axis drag: vertical movement steps through the
 parameters of the active tool, horizontal movement changes the value. It is how
 photographers already work one-handed on a phone, and it means the controls do
 not have to cover the picture.
+
+Under Selective the same drag is aimed at a point instead: tap the photo to
+leave one or pick one up, drag sideways to move its value, up and down to swap
+between brightness, contrast, saturation and reach.
 
 `\` held down shows the untouched original. `Ctrl+Z` and `Ctrl+Shift+Z` walk the
 history stack.

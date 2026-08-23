@@ -68,7 +68,83 @@ uniform float uHueShift[8];
 uniform float uSatShift[8];
 uniform float uLumShift[8];
 
+// Framing. Applied here rather than in a pass of its own so that the blur,
+// vignette and grain further down the chain all see the cropped frame and
+// land relative to the picture the viewer actually gets.
+uniform vec4 uCrop;        // x, y, w, h — a rect in the oriented image
+uniform vec2 uOriented;    // pixel size of the image after quarter turns
+uniform vec2 uSource;      // pixel size of the source texture
+uniform float uQuarter;    // clockwise quarter turns, 0..3
+uniform float uAngle;      // straighten, in radians
+uniform vec2 uFlip;        // 1.0 keeps an axis, -1.0 mirrors it
+uniform float uExpand;     // 1.0 is the plain crop, above that adds border
+uniform vec2 uKeystone;    // perspective tilt, horizontal and vertical
+
+// Selective points, positioned in source coordinates so they stay put when
+// the framing changes underneath them.
+uniform int uPointCount;
+uniform vec4 uPointA[6];   // x, y, radius, unused
+uniform vec4 uPointB[6];   // brightness, contrast, saturation, unused
+
 ${COLOR_LIB}
+
+/**
+ * Maps a point in the output frame back to the pixel it came from.
+ *
+ * Working backwards rather than forwards means every output pixel gets
+ * exactly one sample and there are no seams to fill, which is the usual
+ * reason forward-mapped rotation looks torn.
+ */
+vec2 sourceUV(vec2 uv) {
+  // Into the oriented image, then to coordinates centred on the middle of it.
+  // Expansion grows outward from the centre of the crop rather than the centre
+  // of the photo, so moving the crop does not drag the new border with it.
+  vec2 centre = uCrop.xy + uCrop.zw * 0.5;
+  vec2 p = (centre + (uv - 0.5) * uCrop.zw * uExpand - 0.5) * uOriented;
+
+  // Undo the quarter turn.
+  float turns = mod(uQuarter, 4.0);
+  if (turns > 2.5)      p = vec2(-p.y,  p.x);
+  else if (turns > 1.5) p = -p;
+  else if (turns > 0.5) p = vec2( p.y, -p.x);
+
+  // Undo the straighten, scaling by the same amount the corners were pushed
+  // out so the frame stays filled instead of showing wedges of nothing.
+  float ca = abs(cos(uAngle));
+  float sa = abs(sin(uAngle));
+  float zoom = max(
+    (uSource.x * ca + uSource.y * sa) / uSource.x,
+    (uSource.x * sa + uSource.y * ca) / uSource.y
+  );
+  float c = cos(-uAngle);
+  float s = sin(-uAngle);
+  p = vec2(p.x * c - p.y * s, p.x * s + p.y * c) / zoom;
+
+  // Undo the keystone. A projective divide is what makes converging verticals
+  // parallel again; the pre-scale is the same auto-zoom the straighten uses,
+  // sized off the worst corner so no edge is left sampling past the image.
+  if (abs(uKeystone.x) > 0.001 || abs(uKeystone.y) > 0.001) {
+    vec2 n = p / uSource;                       // -0.5 .. 0.5 either way
+    n *= 1.0 - (abs(uKeystone.x) + abs(uKeystone.y)) * 0.5;
+    n /= 1.0 + uKeystone.x * n.x + uKeystone.y * n.y;
+    p = n * uSource;
+  }
+
+  return p / uSource * uFlip + 0.5;
+}
+
+/**
+ * Folds a coordinate back inside 0..1 by reflection.
+ *
+ * Inside the range it changes nothing, so it can stand in for a clamp
+ * everywhere. Outside it, the picture continues as its own mirror image,
+ * which is what fills the border that Expand opens up — and it is also what
+ * stops a steep keystone from smearing one row of pixels across the corner.
+ */
+vec2 mirrorUV(vec2 uv) {
+  vec2 m = mod(uv, 2.0);
+  return 1.0 - abs(1.0 - m);
+}
 
 /**
  * Weight for one of the 8 HSL bands. Bands sit every 45 degrees and
@@ -82,7 +158,8 @@ float bandWeight(float hue, int band) {
 }
 
 void main() {
-  vec3 c = texture(uImage, vUV).rgb;
+  vec2 suv = mirrorUV(sourceUV(vUV));
+  vec3 c = texture(uImage, suv).rgb;
   c = toLinear(c);
 
   // --- exposure, in stops ---
@@ -162,6 +239,25 @@ void main() {
     c = mix(c, c * hiTint, uSplit.w * smoothstep(0.4, 1.0, sl));
   }
 
+  // --- selective points ---
+  // Distance sets how far the adjustment reaches; the tone under the point
+  // sets what it reaches. Without the second half, brightening a face also
+  // brightens the wall behind it and the whole thing reads as a smudge.
+  for (int i = 0; i < 6; i++) {
+    if (i >= uPointCount) break;
+    vec2 d = (suv - uPointA[i].xy) * vec2(uSource.x / uSource.y, 1.0);
+    float w = smoothstep(1.0, 0.0, length(d) / max(uPointA[i].z, 0.02));
+    if (w < 0.002) continue;
+
+    vec3 anchor = texture(uImage, clamp(uPointA[i].xy, 0.0, 1.0)).rgb;
+    w *= exp(-abs(luma(c) - luma(anchor)) * 4.0);
+
+    c += uPointB[i].x * w * 0.45;
+    c = (c - 0.5) * (1.0 + uPointB[i].y * w) + 0.5;
+    c = mix(vec3(luma(c)), c, 1.0 + uPointB[i].z * w);
+    c = clamp(c, 0.0, 1.0);
+  }
+
   // --- black & white with a channel mixer, the way a colour filter works ---
   if (uBW.w > 0.5) {
     vec3 w = uBW.rgb / max(uBW.r + uBW.g + uBW.b, 0.001);
@@ -213,6 +309,8 @@ uniform vec4 uFx2;   // bloom, halation, dehaze, lensBlur
 uniform vec2 uResolution;
 uniform float uSeed;
 uniform float uVignetteFalloff;
+uniform vec2 uBorder;    // width as a fraction of the short edge, then its tone
+uniform vec3 uPortrait;  // skin smoothing, face spotlight, eye clarity
 
 ${COLOR_LIB}
 
@@ -265,6 +363,42 @@ void main() {
     c += vec3(1.0, 0.38, 0.16) * hi * uFx2.y * 1.1;
   }
 
+  // --- portrait ---
+  // There is no face detector here. Skin sits in a narrow wedge of hue at
+  // moderate saturation, and gating on that is both cheap and honest: it
+  // treats a brick wall as skin now and then, and it never pretends to know
+  // where anyone's eyes are.
+  if (uPortrait.x > 0.001 || uPortrait.z > 0.001) {
+    vec3 hsv = rgb2hsv(c);
+    float hueFit = smoothstep(0.14, 0.05, abs(hsv.x - 0.06));
+    float satFit = smoothstep(0.06, 0.18, hsv.y) * smoothstep(0.75, 0.45, hsv.y);
+    float skin = hueFit * satFit * smoothstep(0.12, 0.3, hsv.z);
+
+    // Smoothing works on the low-pass copy, then puts a fraction of the
+    // texture back so a face keeps pores instead of turning to plastic.
+    if (uPortrait.x > 0.001) {
+      vec3 soft = blur + (sharp - blur) * 0.25;
+      c = mix(c, soft, skin * uPortrait.x * 0.85);
+    }
+
+    // Eye clarity is local contrast held to the dark, detailed parts that
+    // skin is not: lashes, pupils, the line of a brow.
+    if (uPortrait.z > 0.001) {
+      float detail = luma(sharp) - luma(blur);
+      float dark = smoothstep(0.45, 0.1, luma(sharp));
+      c += detail * uPortrait.z * 2.2 * dark * (1.0 - skin);
+    }
+  }
+
+  // Spotlight: the opposite curve to the vignette, lifting the middle rather
+  // than dropping the edges, which is what a reflector does in practice.
+  if (uPortrait.y > 0.001) {
+    vec2 pc = (vUV - 0.5) * vec2(uResolution.x / uResolution.y, 1.0);
+    float lift = smoothstep(0.62, 0.0, length(pc) / 0.7071);
+    c += lift * uPortrait.y * 0.16;
+    c *= 1.0 - smoothstep(0.55, 1.0, length(pc) / 0.7071) * uPortrait.y * 0.22;
+  }
+
   // --- vignette, measured on the true aspect so it stays circular ---
   if (abs(uFx.w) > 0.001) {
     vec2 p = (vUV - 0.5) * vec2(uResolution.x / uResolution.y, 1.0);
@@ -279,6 +413,16 @@ void main() {
     // Film grain is strongest in the midtones, nearly absent in pure black.
     float shape = 1.0 - abs(luma(c) - 0.45) * 1.2;
     c += n * uFx.z * 0.28 * clamp(shape, 0.15, 1.0);
+  }
+
+  // --- print border, last so grain and vignette do not crawl across it ---
+  if (uBorder.x > 0.001) {
+    vec2 px = min(vUV, 1.0 - vUV) * uResolution;
+    float t = uBorder.x * 0.1 * min(uResolution.x, uResolution.y);
+    // A pixel of softness on the inner edge: without it the border shimmers
+    // whenever the preview is scaled by something that is not a whole ratio.
+    float inside = smoothstep(t - 1.0, t + 1.0, min(px.x, px.y));
+    c = mix(vec3(uBorder.y), c, inside);
   }
 
   fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);

@@ -16,7 +16,34 @@ import {
   type Tool,
   type ToolGroup,
 } from "@/lib/tools";
-import { HSL_BANDS, type LookParams } from "@/lib/looks";
+import {
+  HSL_BANDS,
+  CROP_RATIOS,
+  MAX_SELECTIVE_POINTS,
+  fitCropToRatio,
+  frameToSource,
+  sourceToFrame,
+  framedSize,
+  isUnframed,
+  type LookParams,
+  type SelectivePoint,
+} from "@/lib/looks";
+
+/** The four things a selective point can do, in the order the drag cycles them. */
+const POINT_CHANNELS: {
+  key: keyof Pick<
+    SelectivePoint,
+    "brightness" | "contrast" | "saturation" | "size"
+  >;
+  label: string;
+  min: number;
+  max: number;
+}[] = [
+  { key: "brightness", label: "Brightness", min: -1, max: 1 },
+  { key: "contrast", label: "Contrast", min: -1, max: 1 },
+  { key: "saturation", label: "Saturation", min: -1, max: 1 },
+  { key: "size", label: "Size", min: 0.05, max: 1 },
+];
 
 export default function Editor() {
   const ed = useEditor();
@@ -31,8 +58,14 @@ export default function Editor() {
   const [toast, setToast] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Selective: which point the controls and the canvas drag are aimed at,
+  // and which of its four values that drag moves.
+  const [activePoint, setActivePoint] = useState(0);
+  const [pointChannel, setPointChannel] = useState(0);
+
   const tool = TOOLS_BY_ID.get(activeToolId) ?? TOOLS[0];
   const slider = tool.sliders[sliderIndex] ?? tool.sliders[0];
+  const isSelective = activeToolId === "selective";
 
   const notify = useCallback((msg: string) => {
     setToast(msg);
@@ -80,10 +113,58 @@ export default function Editor() {
     startValue: number;
     axis: "none" | "x" | "y";
     startIndex: number;
+    mode: "slider" | "point";
   } | null>(null);
 
   const onPointerDown = (e: React.PointerEvent) => {
-    if (!ed.isReady || !slider) return;
+    if (!ed.isReady) return;
+
+    // Selective works the way it does in a darkroom: put a finger on the part
+    // of the print you mean, then adjust. A tap either picks up a point that
+    // is already there or leaves a new one where the finger landed.
+    if (isSelective && ed.imageSize) {
+      const rect = (e.target as HTMLElement).getBoundingClientRect();
+      const uv = {
+        x: (e.clientX - rect.left) / rect.width,
+        y: (e.clientY - rect.top) / rect.height,
+      };
+      const near = nearestPoint(ed.params, uv, ed.imageSize);
+      let index = near;
+      if (near === -1) {
+        if (ed.params.points.length >= MAX_SELECTIVE_POINTS) {
+          notify(`Six points is the limit. Remove one to place another.`);
+          return;
+        }
+        const src = frameToSource(ed.params, uv, ed.imageSize.w, ed.imageSize.h);
+        const point: SelectivePoint = {
+          x: clamp(src.x, 0, 1),
+          y: clamp(src.y, 0, 1),
+          size: 0.22,
+          brightness: 0,
+          contrast: 0,
+          saturation: 0,
+        };
+        index = ed.params.points.length;
+        ed.patchParams(
+          { points: [...ed.params.points, point] },
+          { commit: true, label: `Selective · point ${index + 1}` }
+        );
+      }
+      setActivePoint(index);
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      const current = ed.params.points[index];
+      dragRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+        startValue: current ? current[POINT_CHANNELS[pointChannel].key] : 0,
+        axis: "none",
+        startIndex: pointChannel,
+        mode: "point",
+      };
+      return;
+    }
+
+    if (!slider) return;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     dragRef.current = {
       x: e.clientX,
@@ -91,12 +172,41 @@ export default function Editor() {
       startValue: ed.params[slider.key] as number,
       axis: "none",
       startIndex: sliderIndex,
+      mode: "slider",
     };
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
     const d = dragRef.current;
-    if (!d || !slider) return;
+    if (!d) return;
+
+    if (d.mode === "point") {
+      const dx = e.clientX - d.x;
+      const dy = e.clientY - d.y;
+      if (d.axis === "none") {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        d.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+      }
+      if (d.axis === "y") {
+        const next = clampInt(
+          d.startIndex + Math.round(dy / 46),
+          0,
+          POINT_CHANNELS.length - 1
+        );
+        if (next !== pointChannel) setPointChannel(next);
+        return;
+      }
+      const ch = POINT_CHANNELS[pointChannel];
+      const value = clamp(
+        d.startValue + (dx / 380) * (ch.max - ch.min),
+        ch.min,
+        ch.max
+      );
+      updatePoint(activePoint, { [ch.key]: value }, false);
+      return;
+    }
+
+    if (!slider) return;
 
     const dx = e.clientX - d.x;
     const dy = e.clientY - d.y;
@@ -124,7 +234,12 @@ export default function Editor() {
   const onPointerUp = () => {
     const d = dragRef.current;
     dragRef.current = null;
-    if (d?.axis === "x") ed.commit(`${tool.name} · ${slider?.label}`);
+    if (d?.axis !== "x") return;
+    if (d.mode === "point") {
+      ed.commit(`Selective · ${POINT_CHANNELS[pointChannel].label}`);
+    } else {
+      ed.commit(`${tool.name} · ${slider?.label}`);
+    }
   };
 
   /* ---------------------------------------------------------- */
@@ -151,6 +266,52 @@ export default function Editor() {
     // Deliberately mount-only: re-running would reapply the same recipe.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // What the export will actually be, once crop and rotation are counted.
+  const framed = useMemo(
+    () =>
+      ed.imageSize
+        ? framedSize(ed.params, ed.imageSize.w, ed.imageSize.h)
+        : null,
+    [ed.imageSize, ed.params]
+  );
+
+  /**
+   * Applies several framing keys at once. Dragging passes commit = false so a
+   * sweep of a slider leaves one step in the history rather than two hundred.
+   */
+  const applyFraming = useCallback(
+    (patch: Partial<LookParams>, label: string, commit = true) => {
+      ed.patchParams(patch, { commit, label });
+    },
+    [ed]
+  );
+
+  /** Edits one selective point in place, leaving the rest untouched. */
+  const updatePoint = useCallback(
+    (index: number, patch: Partial<SelectivePoint>, commit = true) => {
+      const points = ed.params.points.map((p, i) =>
+        i === index ? { ...p, ...patch } : p
+      );
+      if (!points[index]) return;
+      ed.patchParams(
+        { points },
+        { commit, label: `Selective · point ${index + 1}` }
+      );
+    },
+    [ed]
+  );
+
+  const removePoint = useCallback(
+    (index: number) => {
+      ed.patchParams(
+        { points: ed.params.points.filter((_, i) => i !== index) },
+        { commit: true, label: "Selective · point removed" }
+      );
+      setActivePoint((a) => Math.max(0, a > index ? a - 1 : a));
+    },
+    [ed]
+  );
 
   const grouped = useMemo(() => {
     const map = new Map<ToolGroup, Tool[]>();
@@ -180,6 +341,12 @@ export default function Editor() {
           {ed.imageSize && (
             <span className="tabular ml-2 text-paper-400/70">
               {ed.imageSize.w}×{ed.imageSize.h}
+              {framed &&
+                (framed.w !== ed.imageSize.w || framed.h !== ed.imageSize.h) && (
+                  <span className="ml-1.5 text-amber-400/80">
+                    → {framed.w}×{framed.h}
+                  </span>
+                )}
             </span>
           )}
         </span>
@@ -262,6 +429,62 @@ export default function Editor() {
             style={{ display: ed.isReady ? "block" : "none" }}
           />
 
+          {/* Selective markers, laid over the picture at its display size. */}
+          {isSelective && ed.isReady && ed.displaySize && ed.imageSize && (
+            <div
+              className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
+              style={{ width: ed.displaySize.w, height: ed.displaySize.h }}
+            >
+              {ed.params.points.map((p, i) => {
+                const at = sourceToFrame(
+                  ed.params,
+                  p,
+                  ed.imageSize!.w,
+                  ed.imageSize!.h
+                );
+                if (at.x < -0.05 || at.x > 1.05 || at.y < -0.05 || at.y > 1.05) {
+                  return null;
+                }
+                const active = i === activePoint;
+                return (
+                  <div
+                    key={i}
+                    className="absolute -translate-x-1/2 -translate-y-1/2"
+                    style={{ left: `${at.x * 100}%`, top: `${at.y * 100}%` }}
+                  >
+                    {active && (
+                      <div
+                        className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full border border-amber-300/35"
+                        style={{
+                          left: 0,
+                          top: 0,
+                          // The mask radius is a fraction of the source
+                          // height, so a crop makes it cover more of what
+                          // is left — which is what the ring has to show.
+                          width:
+                            ((p.size * 2) / ed.params.cropH) *
+                            ed.displaySize!.h,
+                          height:
+                            ((p.size * 2) / ed.params.cropH) *
+                            ed.displaySize!.h,
+                        }}
+                      />
+                    )}
+                    <div
+                      className={`flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border text-[10px] font-medium ${
+                        active
+                          ? "border-amber-300 bg-amber-400/90 text-ink-900"
+                          : "border-paper-100/70 bg-ink-900/70 text-paper-200"
+                      }`}
+                    >
+                      {i + 1}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {!ed.isReady && (
             <button
               onClick={() => fileInputRef.current?.click()}
@@ -281,7 +504,22 @@ export default function Editor() {
           )}
 
           {/* Live readout of the parameter under the finger. */}
-          {ed.isReady && slider && (
+          {ed.isReady && isSelective && ed.params.points[activePoint] && (
+            <div className="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded-full border border-ink-600/80 bg-ink-900/85 px-3.5 py-1.5 backdrop-blur">
+              <span className="text-xs text-paper-300">
+                Point {activePoint + 1} · {POINT_CHANNELS[pointChannel].label}
+              </span>
+              <span className="tabular ml-2.5 text-xs font-medium text-amber-400">
+                {Math.round(
+                  ed.params.points[activePoint][
+                    POINT_CHANNELS[pointChannel].key
+                  ] * 100
+                )}
+              </span>
+            </div>
+          )}
+
+          {ed.isReady && !isSelective && slider && (
             <div className="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded-full border border-ink-600/80 bg-ink-900/85 px-3.5 py-1.5 backdrop-blur">
               <span className="text-xs text-paper-300">{slider.label}</span>
               <span className="tabular ml-2.5 text-xs font-medium text-amber-400">
@@ -332,10 +570,18 @@ export default function Editor() {
                 }}
                 tool={tool}
                 params={ed.params}
+                imageSize={ed.imageSize}
                 sliderIndex={sliderIndex}
                 onSliderFocus={setSliderIndex}
                 onChange={(k, v) => ed.setParam(k, v)}
                 onCommit={(label) => ed.commit(label)}
+                onFraming={applyFraming}
+                activePoint={activePoint}
+                pointChannel={pointChannel}
+                onSelectPoint={setActivePoint}
+                onSelectChannel={setPointChannel}
+                onPointChange={updatePoint}
+                onRemovePoint={removePoint}
               />
             )}
             {panel === "stack" && (
@@ -371,7 +617,7 @@ export default function Editor() {
             {panel === "export" && (
               <ExportPanel
                 disabled={!ed.isReady}
-                imageSize={ed.imageSize}
+                imageSize={framed}
                 onExport={async (opts) => {
                   const blob = await ed.exportImage(opts);
                   const a = document.createElement("a");
@@ -405,20 +651,44 @@ function ToolsPanel({
   onSelectTool,
   tool,
   params,
+  imageSize,
   sliderIndex,
   onSliderFocus,
   onChange,
   onCommit,
+  onFraming,
+  activePoint,
+  pointChannel,
+  onSelectPoint,
+  onSelectChannel,
+  onPointChange,
+  onRemovePoint,
 }: {
   grouped: Map<ToolGroup, Tool[]>;
   activeToolId: string;
   onSelectTool: (id: string) => void;
   tool: Tool;
   params: LookParams;
+  imageSize: { w: number; h: number } | null;
   sliderIndex: number;
   onSliderFocus: (i: number) => void;
   onChange: (key: keyof LookParams, value: never) => void;
   onCommit: (label: string) => void;
+  onFraming: (
+    patch: Partial<LookParams>,
+    label: string,
+    commit?: boolean
+  ) => void;
+  activePoint: number;
+  pointChannel: number;
+  onSelectPoint: (i: number) => void;
+  onSelectChannel: (i: number) => void;
+  onPointChange: (
+    index: number,
+    patch: Partial<SelectivePoint>,
+    commit?: boolean
+  ) => void;
+  onRemovePoint: (i: number) => void;
 }) {
   return (
     <div className="p-3">
@@ -469,6 +739,24 @@ function ToolsPanel({
             <BWControls params={params} onChange={onChange} onCommit={onCommit} />
           )}
           {tool.id === "curves" && <CurvesNote />}
+          {tool.id === "selective" && (
+            <SelectiveControls
+              points={params.points}
+              active={activePoint}
+              channel={pointChannel}
+              onSelect={onSelectPoint}
+              onChannel={onSelectChannel}
+              onChange={onPointChange}
+              onRemove={onRemovePoint}
+            />
+          )}
+          {tool.id === "crop" && (
+            <FrameControls
+              params={params}
+              imageSize={imageSize}
+              onFraming={onFraming}
+            />
+          )}
         </div>
       </div>
 
@@ -693,6 +981,387 @@ function BWControls({
   );
 }
 
+function SelectiveControls({
+  points,
+  active,
+  channel,
+  onSelect,
+  onChannel,
+  onChange,
+  onRemove,
+}: {
+  points: SelectivePoint[];
+  active: number;
+  channel: number;
+  onSelect: (i: number) => void;
+  onChannel: (i: number) => void;
+  onChange: (
+    index: number,
+    patch: Partial<SelectivePoint>,
+    commit?: boolean
+  ) => void;
+  onRemove: (i: number) => void;
+}) {
+  const point = points[active];
+
+  if (!point) {
+    return (
+      <p className="px-1.5 text-[11px] leading-relaxed text-paper-400">
+        Tap the photo to leave a point where you want the change. Drag sideways
+        to move the value, up and down to swap between brightness, contrast,
+        saturation and how far the point reaches.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-3 px-1.5 pt-1">
+      <div className="flex flex-wrap items-center gap-1">
+        {points.map((_, i) => (
+          <button
+            key={i}
+            onClick={() => onSelect(i)}
+            className={`focus-ring h-6 w-6 rounded-full border text-[10px] transition ${
+              i === active
+                ? "border-amber-400 bg-amber-500/20 text-amber-200"
+                : "border-ink-600 text-paper-400 hover:border-ink-500"
+            }`}
+          >
+            {i + 1}
+          </button>
+        ))}
+        <button
+          onClick={() => onRemove(active)}
+          className="focus-ring ml-auto rounded border border-ink-600 px-1.5 py-1 text-[10px] text-paper-400 transition hover:border-amber-600/50 hover:text-amber-200"
+        >
+          Remove point {active + 1}
+        </button>
+      </div>
+
+      {POINT_CHANNELS.map((ch, i) => (
+        <div
+          key={ch.key}
+          className={`rounded-md px-1.5 py-1 transition ${
+            i === channel ? "bg-ink-700/60" : ""
+          }`}
+          onPointerDown={() => onChannel(i)}
+        >
+          <div className="flex items-baseline justify-between">
+            <span className="text-[11px] text-paper-300">{ch.label}</span>
+            <span className="tabular text-[11px] text-amber-400">
+              {ch.key === "size"
+                ? `${Math.round(point.size * 100)}`
+                : `${point[ch.key] > 0 ? "+" : ""}${Math.round(
+                    point[ch.key] * 100
+                  )}`}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={ch.min}
+            max={ch.max}
+            step={0.01}
+            value={point[ch.key]}
+            aria-label={`Point ${active + 1} ${ch.label}`}
+            onChange={(e) =>
+              onChange(active, { [ch.key]: Number(e.target.value) }, false)
+            }
+            onPointerUp={() => onChange(active, {})}
+            onKeyUp={() => onChange(active, {})}
+            className="mt-1 w-full accent-amber-500"
+          />
+        </div>
+      ))}
+
+      <p className="text-[10px] leading-snug text-paper-400/80">
+        The point holds to tones like the one underneath it, so brightening a
+        face does not drag the wall behind it along too.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Framing without a drag surface on the canvas.
+ *
+ * The rectangle is driven by a ratio, a size and two offsets rather than by
+ * corner handles. That is less direct than dragging, but it is exact, it works
+ * the same on a phone as on a desktop, and every value it produces is one the
+ * shader already understands — the handles land on top of this later without
+ * changing what a Look means.
+ */
+function FrameControls({
+  params,
+  imageSize,
+  onFraming,
+}: {
+  params: LookParams;
+  imageSize: { w: number; h: number } | null;
+  onFraming: (
+    patch: Partial<LookParams>,
+    label: string,
+    commit?: boolean
+  ) => void;
+}) {
+  const source = imageSize ?? { w: 1000, h: 1000 };
+  const turned = params.quarterTurns % 2 === 1;
+  const oriented = turned
+    ? { w: source.h, h: source.w }
+    : { w: source.w, h: source.h };
+
+  // Aspect of the rectangle as it stands, in pixels rather than fractions.
+  const aspect =
+    (params.cropW * oriented.w) / Math.max(params.cropH * oriented.h, 1e-6);
+  // The same shape grown until it touches the edges: the ceiling for Size.
+  const fitted = fitCropToRatio(params, aspect, source.w, source.h);
+  const size = clamp(params.cropW / Math.max(fitted.cropW, 1e-6), 0.2, 1);
+
+  const room = { x: 1 - params.cropW, y: 1 - params.cropH };
+  const offset = {
+    x: room.x > 1e-6 ? params.cropX / room.x : 0.5,
+    y: room.y > 1e-6 ? params.cropY / room.y : 0.5,
+  };
+
+  const setSize = (s: number) => {
+    const cw = fitted.cropW * s;
+    const ch = fitted.cropH * s;
+    onFraming(
+      {
+        cropW: cw,
+        cropH: ch,
+        cropX: clamp(params.cropX + params.cropW / 2 - cw / 2, 0, 1 - cw),
+        cropY: clamp(params.cropY + params.cropH / 2 - ch / 2, 0, 1 - ch),
+      },
+      `Crop · ${Math.round(s * 100)}%`,
+      false
+    );
+  };
+
+  const setRatio = (label: string, ratio: number) => {
+    const target = ratio === 0 ? oriented.w / oriented.h : ratio;
+    const next = fitCropToRatio(params, target, source.w, source.h);
+    // Keep whatever size the rectangle already had, so switching between
+    // ratios does not silently zoom back out to the full frame.
+    onFraming(
+      {
+        cropW: next.cropW * size,
+        cropH: next.cropH * size,
+        cropX: clamp(
+          params.cropX + params.cropW / 2 - (next.cropW * size) / 2,
+          0,
+          1 - next.cropW * size
+        ),
+        cropY: clamp(
+          params.cropY + params.cropH / 2 - (next.cropH * size) / 2,
+          0,
+          1 - next.cropH * size
+        ),
+      },
+      `Crop · ${label}`
+    );
+  };
+
+  /**
+   * A quarter turn moves the crop rectangle with the photo. Leaving it where
+   * it was would slide the framing onto a different part of the picture,
+   * which is never what someone rotating a photo meant to happen.
+   */
+  const turn = (dir: 1 | -1) => {
+    const { cropX: x, cropY: y, cropW: w, cropH: h } = params;
+    const rotated =
+      dir === 1
+        ? { cropX: 1 - y - h, cropY: x, cropW: h, cropH: w }
+        : { cropX: y, cropY: 1 - x - w, cropW: h, cropH: w };
+    onFraming(
+      { ...rotated, quarterTurns: (params.quarterTurns + dir + 4) % 4 },
+      dir === 1 ? "Rotate right" : "Rotate left"
+    );
+  };
+
+  const ratios = CROP_RATIOS.filter((r) => r.ratio !== null);
+  const activeRatio = ratios.find(
+    (r) =>
+      Math.abs((r.ratio === 0 ? oriented.w / oriented.h : r.ratio!) - aspect) <
+      0.01
+  );
+
+  return (
+    <div className="space-y-3 px-1.5 pt-1">
+      <div>
+        <p className="mb-1.5 text-[10px] uppercase tracking-[0.12em] text-paper-400">
+          Ratio
+        </p>
+        <div className="flex flex-wrap gap-1">
+          {ratios.map((r) => (
+            <button
+              key={r.label}
+              onClick={() => setRatio(r.label, r.ratio!)}
+              className={`focus-ring rounded border px-1.5 py-1 text-[10px] transition ${
+                activeRatio?.label === r.label
+                  ? "border-amber-500/70 bg-amber-500/10 text-amber-200"
+                  : "border-ink-600 text-paper-300 hover:border-ink-500"
+              }`}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <FrameSlider
+        label="Size"
+        value={size}
+        min={0.2}
+        max={1}
+        readout={`${Math.round(size * 100)}%`}
+        onChange={setSize}
+        onRelease={() => onFraming({}, `Crop · ${Math.round(size * 100)}%`)}
+      />
+      <FrameSlider
+        label="Move across"
+        value={offset.x}
+        min={0}
+        max={1}
+        disabled={room.x <= 1e-6}
+        readout={`${Math.round(offset.x * 100)}`}
+        onChange={(v) =>
+          onFraming(
+            { cropX: clamp(v * room.x, 0, room.x) },
+            "Crop · position",
+            false
+          )
+        }
+        onRelease={() => onFraming({}, "Crop · position")}
+      />
+      <FrameSlider
+        label="Move down"
+        value={offset.y}
+        min={0}
+        max={1}
+        disabled={room.y <= 1e-6}
+        readout={`${Math.round(offset.y * 100)}`}
+        onChange={(v) =>
+          onFraming(
+            { cropY: clamp(v * room.y, 0, room.y) },
+            "Crop · position",
+            false
+          )
+        }
+        onRelease={() => onFraming({}, "Crop · position")}
+      />
+
+      <div>
+        <p className="mb-1.5 text-[10px] uppercase tracking-[0.12em] text-paper-400">
+          Orientation
+        </p>
+        <div className="flex flex-wrap gap-1">
+          <FrameButton onClick={() => turn(-1)}>Rotate left</FrameButton>
+          <FrameButton onClick={() => turn(1)}>Rotate right</FrameButton>
+          <FrameButton
+            active={params.flipH}
+            onClick={() => onFraming({ flipH: !params.flipH }, "Mirror across")}
+          >
+            Mirror
+          </FrameButton>
+          <FrameButton
+            active={params.flipV}
+            onClick={() => onFraming({ flipV: !params.flipV }, "Flip upright")}
+          >
+            Flip
+          </FrameButton>
+        </div>
+      </div>
+
+      <button
+        disabled={isUnframed(params)}
+        onClick={() =>
+          onFraming(
+            {
+              cropX: 0,
+              cropY: 0,
+              cropW: 1,
+              cropH: 1,
+              quarterTurns: 0,
+              straighten: 0,
+              flipH: false,
+              flipV: false,
+            },
+            "Framing cleared"
+          )
+        }
+        className="focus-ring w-full rounded-md border border-ink-600 px-2 py-1.5 text-[10px] text-paper-400 transition hover:border-ink-500 hover:text-paper-200 disabled:opacity-35"
+      >
+        Back to the full frame
+      </button>
+    </div>
+  );
+}
+
+function FrameSlider({
+  label,
+  value,
+  min,
+  max,
+  readout,
+  disabled,
+  onChange,
+  onRelease,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  readout: string;
+  disabled?: boolean;
+  onChange: (v: number) => void;
+  onRelease: () => void;
+}) {
+  return (
+    <div className={disabled ? "opacity-40" : undefined}>
+      <div className="flex items-baseline justify-between">
+        <span className="text-[11px] text-paper-300">{label}</span>
+        <span className="tabular text-[11px] text-amber-400">{readout}</span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={0.005}
+        value={value}
+        disabled={disabled}
+        aria-label={label}
+        onChange={(e) => onChange(Number(e.target.value))}
+        onPointerUp={onRelease}
+        onKeyUp={onRelease}
+        className="mt-1 w-full accent-amber-500"
+      />
+    </div>
+  );
+}
+
+function FrameButton({
+  active,
+  onClick,
+  children,
+}: {
+  active?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`focus-ring rounded border px-1.5 py-1 text-[10px] transition ${
+        active
+          ? "border-amber-500/70 bg-amber-500/10 text-amber-200"
+          : "border-ink-600 text-paper-300 hover:border-ink-500"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
 function CurvesNote() {
   return (
     <p className="px-1.5 text-[11px] leading-relaxed text-paper-400">
@@ -748,10 +1417,30 @@ function StackPanel({
         <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-paper-400">
           Current Look
         </h3>
+        {params.points.length > 0 && (
+          <div className="mb-2 rounded-md border border-ink-700 p-2">
+            <p className="text-[11px] font-medium text-paper-200">Selective</p>
+            <p className="mt-1 text-[10px] text-paper-400">
+              {params.points.length}{" "}
+              {params.points.length === 1 ? "point" : "points"} placed on the
+              photo
+            </p>
+          </div>
+        )}
+        {!isUnframed(params) && (
+          <div className="mb-2 rounded-md border border-ink-700 p-2">
+            <p className="text-[11px] font-medium text-paper-200">Framing</p>
+            <p className="mt-1 text-[10px] text-paper-400">
+              {describeFraming(params)}
+            </p>
+          </div>
+        )}
         {touched.length === 0 ? (
-          <p className="text-[11px] text-paper-400">
-            Nothing applied yet. The photo is untouched.
-          </p>
+          isUnframed(params) && params.points.length === 0 ? (
+            <p className="text-[11px] text-paper-400">
+              Nothing applied yet. The photo is untouched.
+            </p>
+          ) : null
         ) : (
           <ul className="space-y-2">
             {touched.map(({ tool, active }) => (
@@ -978,6 +1667,47 @@ function IconButton({
 }
 
 /* ------------------------------------------------------------------ */
+
+/**
+ * Index of the point under a tap, or -1 to mean "none, place a new one".
+ *
+ * The hit radius is fixed in frame terms rather than tied to the point's own
+ * size: a point tuned down to a small mask still has to be easy to grab back.
+ */
+function nearestPoint(
+  params: LookParams,
+  uv: { x: number; y: number },
+  size: { w: number; h: number }
+): number {
+  let best = -1;
+  let bestDist = 0.05;
+  params.points.forEach((p, i) => {
+    const at = sourceToFrame(params, p, size.w, size.h);
+    const d = Math.hypot(at.x - uv.x, at.y - uv.y);
+    if (d < bestDist) {
+      bestDist = d;
+      best = i;
+    }
+  });
+  return best;
+}
+
+/** Plain-language summary of the framing, for the Look stack. */
+function describeFraming(p: LookParams): string {
+  const parts: string[] = [];
+  if (p.cropW < 0.999 || p.cropH < 0.999) {
+    parts.push(
+      `cropped to ${Math.round(p.cropW * 100)} × ${Math.round(p.cropH * 100)} percent`
+    );
+  }
+  if (p.quarterTurns) parts.push(`turned ${p.quarterTurns * 90} degrees`);
+  if (p.straighten) parts.push(`straightened ${(p.straighten * 15).toFixed(1)}°`);
+  if (p.flipH) parts.push("mirrored");
+  if (p.flipV) parts.push("flipped");
+  if (p.perspectiveH || p.perspectiveV) parts.push("perspective corrected");
+  if (p.expand) parts.push(`expanded ${Math.round(p.expand * 50)} percent`);
+  return parts.join(", ");
+}
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));

@@ -1,0 +1,8 @@
+# The Rust toolchain leaves a few hundred megabytes of intermediate objects
+# under anchor/target. None of it is needed to build the site, and left in
+# place it pushes the upload past the point where it reliably completes.
+anchor/target
+anchor/.anchor
+node_modules
+.next
+*.log
