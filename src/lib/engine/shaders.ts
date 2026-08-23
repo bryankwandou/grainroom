@@ -86,6 +86,9 @@ uniform int uPointCount;
 uniform vec4 uPointA[6];   // x, y, radius, unused
 uniform vec4 uPointB[6];   // brightness, contrast, saturation, unused
 
+uniform int uHealCount;
+uniform vec4 uHeal[8];     // x, y, radius, unused
+
 ${COLOR_LIB}
 
 /**
@@ -160,6 +163,34 @@ float bandWeight(float hue, int band) {
 void main() {
   vec2 suv = mirrorUV(sourceUV(vUV));
   vec3 c = texture(uImage, suv).rgb;
+
+  // --- healing ---
+  // A blemish is filled from the ring of pixels around it, weighted toward
+  // the side of the ring the pixel is nearest. That is the cheap end of
+  // inpainting: it cannot invent a missing eyebrow, but it takes out a spot
+  // on skin or a sensor mark on a sky without leaving a visible disc.
+  float aspect = uSource.x / uSource.y;
+  for (int i = 0; i < 8; i++) {
+    if (i >= uHealCount) break;
+    float r = max(uHeal[i].z, 0.002);
+    vec2 d = (suv - uHeal[i].xy) * vec2(aspect, 1.0);
+    float dist = length(d) / r;
+    if (dist >= 1.0) continue;
+
+    vec3 acc = vec3(0.0);
+    float wsum = 0.0;
+    vec2 dir0 = normalize(d + vec2(1.0e-6));
+    for (int k = 0; k < 8; k++) {
+      float a = float(k) * 0.7853981634;
+      vec2 dir = vec2(cos(a), sin(a));
+      vec2 sp = uHeal[i].xy + dir * r * 1.18 / vec2(aspect, 1.0);
+      float w = 0.12 + max(dot(dir0, dir), 0.0);
+      acc += texture(uImage, mirrorUV(sp)).rgb * w;
+      wsum += w;
+    }
+    c = mix(c, acc / wsum, smoothstep(1.0, 0.6, dist));
+  }
+
   c = toLinear(c);
 
   // --- exposure, in stops ---
@@ -303,6 +334,11 @@ out vec4 fragColor;
 
 uniform sampler2D uImage;   // sharp result of the adjust pass
 uniform sampler2D uBlur;    // low-pass copy of the same
+uniform sampler2D uText;    // caption, drawn at the output resolution
+// Painted mask. Alpha is how much brush landed on this pixel; red, green and
+// blue are the shares of it that were dodging, burning and saturating. What
+// the three do not account for is the share that was desaturating.
+uniform sampler2D uPaint;
 
 uniform vec4 uFx;    // structure, sharpen, grain, vignette
 uniform vec4 uFx2;   // bloom, halation, dehaze, lensBlur
@@ -311,6 +347,8 @@ uniform float uSeed;
 uniform float uVignetteFalloff;
 uniform vec2 uBorder;    // width as a fraction of the short edge, then its tone
 uniform vec3 uPortrait;  // skin smoothing, face spotlight, eye clarity
+uniform float uTextOpacity;
+uniform float uPaintOn;
 
 ${COLOR_LIB}
 
@@ -363,6 +401,22 @@ void main() {
     c += vec3(1.0, 0.38, 0.16) * hi * uFx2.y * 1.1;
   }
 
+  // --- painted dodge, burn and saturation ---
+  // Dodging holds the highlights and burning holds the shadows, the way the
+  // paper does: past the end of the scale there is nothing left to move, and
+  // pushing anyway is what makes hand-painted work look pasted on.
+  if (uPaintOn > 0.5) {
+    vec4 m = texture(uPaint, vUV);
+    float desat = max(m.a - (m.r + m.g + m.b) * m.a, 0.0);
+    float light = (m.r - m.g) * m.a;
+    if (abs(light) > 0.002) {
+      float room = light > 0.0 ? 1.0 - luma(c) : luma(c);
+      c += light * room * 0.9;
+    }
+    float sat = m.b * m.a - desat;
+    if (abs(sat) > 0.002) c = mix(vec3(luma(c)), c, 1.0 + sat);
+  }
+
   // --- portrait ---
   // There is no face detector here. Skin sits in a narrow wedge of hue at
   // moderate saturation, and gating on that is both cheap and honest: it
@@ -413,6 +467,12 @@ void main() {
     // Film grain is strongest in the midtones, nearly absent in pure black.
     float shape = 1.0 - abs(luma(c) - 0.45) * 1.2;
     c += n * uFx.z * 0.28 * clamp(shape, 0.15, 1.0);
+  }
+
+  // --- caption, over the picture but under the border ---
+  if (uTextOpacity > 0.001) {
+    vec4 t = texture(uText, vUV);
+    c = mix(c, t.rgb, t.a * uTextOpacity);
   }
 
   // --- print border, last so grain and vignette do not crawl across it ---

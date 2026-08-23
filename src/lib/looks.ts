@@ -76,6 +76,17 @@ export interface LookParams {
   perspectiveH: number;  // -1 .. 1
   perspectiveV: number;  // -1 .. 1
 
+  // Text. Drawn into a texture at the output resolution and composited on the
+  // GPU, so the preview and the export are the same pixels rather than two
+  // different renderers that agree most of the time.
+  text: string;
+  textX: number;         // 0 .. 1 across the frame
+  textY: number;         // 0 .. 1 down the frame
+  textSize: number;      // 0 .. 1, a fraction of the frame height
+  textTone: number;      // 0 black .. 1 white
+  textOpacity: number;   // 0 .. 1
+  textFamily: TextFamily;
+
   // Portrait. Gated on skin tone rather than on a detected face: no model
   // ships with the app, and a tone gate is honest about what it can do.
   skinSmooth: number;    // 0 .. 1
@@ -89,6 +100,11 @@ export interface LookParams {
 
   // Selective control points, anchored to the photo rather than to the frame
   points: SelectivePoint[];
+
+  // Painted work. Both are stored as marks in source coordinates rather than
+  // as a bitmap, which is what keeps a Look small enough to put in a URL.
+  strokes: BrushStroke[];
+  heals: HealMark[];
 
   // Curves, control points in 0..1 space
   curveRGB: CurvePoint[];
@@ -120,6 +136,54 @@ export interface SelectivePoint {
 
 /** The shader carries this many; more would cost a uniform array resize. */
 export const MAX_SELECTIVE_POINTS = 6;
+
+/**
+ * One dab of the brush, in source coordinates.
+ *
+ * A stroke is a run of these rather than a path, because stamps composite in
+ * any order and a path does not: two crossing strokes have to look the same
+ * whichever was painted first, or replaying a Look would not be faithful.
+ */
+export interface BrushStroke {
+  x: number;
+  y: number;
+  r: number;              // radius as a fraction of the source height
+  amount: number;         // -1 .. 1
+  mode: BrushMode;
+}
+
+export type BrushMode = "light" | "saturation";
+
+/** A blemish to fill in from the ring of pixels around it. */
+export interface HealMark {
+  x: number;
+  y: number;
+  r: number;
+}
+
+/**
+ * Caps, chosen so a fully worked Look still fits in a link. Painted marks are
+ * the only part of the format that grows with use, so they are the part that
+ * has to have a ceiling.
+ */
+export const MAX_STROKES = 96;
+export const MAX_HEALS = 8;
+
+export type TextFamily = "sans" | "serif" | "mono";
+
+/**
+ * Font stacks rather than a bundled face.
+ *
+ * A Look has to replay identically on the machine that opens it, and a
+ * webfont that fails to load would silently change the picture. These three
+ * exist everywhere, and naming the generic family last means the worst case
+ * is a different cut of the same shape, not a missing line of type.
+ */
+export const TEXT_FAMILIES: Record<TextFamily, string> = {
+  sans: '"Helvetica Neue", Helvetica, Arial, sans-serif',
+  serif: 'Georgia, "Times New Roman", Times, serif',
+  mono: '"SF Mono", "Cascadia Mono", Consolas, "Courier New", monospace',
+};
 
 export const HSL_BANDS = [
   "Red",
@@ -182,12 +246,21 @@ export function defaultParams(): LookParams {
     expand: 0,
     perspectiveH: 0,
     perspectiveV: 0,
+    text: "",
+    textX: 0.5,
+    textY: 0.88,
+    textSize: 0.06,
+    textTone: 1,
+    textOpacity: 1,
+    textFamily: "sans",
     skinSmooth: 0,
     faceSpotlight: 0,
     eyeClarity: 0,
     borderWidth: 0,
     borderTone: 1,
     points: [],
+    strokes: [],
+    heals: [],
     curveRGB: [...LINEAR_CURVE],
     curveR: [...LINEAR_CURVE],
     curveG: [...LINEAR_CURVE],

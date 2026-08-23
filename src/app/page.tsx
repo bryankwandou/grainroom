@@ -212,8 +212,10 @@ export default function Home() {
                 ))}
               </ul>
               <p className="mt-4 text-[11px] leading-relaxed text-paper-400/70">
-                Cut Out will call the background removal service already running
-                in Removix. Everything else in that column is local work.
+                What is left needs something a Look cannot carry on its own: a
+                call out to the background removal service already running in
+                Removix, a second photograph, or a decoder that has to run
+                before the pipeline does. Everything else is finished and local.
               </p>
             </div>
           </div>

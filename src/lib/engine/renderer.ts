@@ -2,8 +2,11 @@ import { VERT, FRAG_ADJUST, FRAG_BLUR, FRAG_COMPOSITE } from "./shaders";
 import {
   MAX_STRAIGHTEN_RAD,
   MAX_SELECTIVE_POINTS,
+  MAX_HEALS,
+  sourceToFrame,
   buildCurveLUT,
   expandFactor,
+  TEXT_FAMILIES,
   framedSize,
   type LookParams,
 } from "../looks";
@@ -27,6 +30,14 @@ export class GrainroomRenderer {
   private vao: WebGLVertexArrayObject;
   private sourceTex: WebGLTexture | null = null;
   private curveTex: WebGLTexture;
+  private textTex: WebGLTexture;
+  /** What the text texture currently holds, so it is not redrawn every frame. */
+  private textKey = "";
+  private textCanvas: HTMLCanvasElement | null = null;
+
+  private paintTex: WebGLTexture;
+  private paintKey = "";
+  private paintCanvas: HTMLCanvasElement | null = null;
 
   private targets: RenderTarget[] = [];
   private texFormat: { internal: number; type: number };
@@ -76,6 +87,24 @@ export class GrainroomRenderer {
     gl.bindVertexArray(null);
 
     this.curveTex = createTexture(gl);
+    this.textTex = createTexture(gl);
+    this.paintTex = createTexture(gl);
+    // One transparent pixel each, so the composite pass always has something
+    // valid bound whether or not the photo carries a caption or any painting.
+    for (const tex of [this.textTex, this.paintTex]) {
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        1,
+        1,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        new Uint8Array([0, 0, 0, 0])
+      );
+    }
   }
 
   get width() {
@@ -146,10 +175,14 @@ export class GrainroomRenderer {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
     // --- pass 4: structure, glow, grain, vignette -> screen ---
+    this.ensureText(params, w, h);
+    this.ensurePaint(params, w, h);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.useProgram(this.progComposite);
     this.bindTexture(this.progComposite, "uImage", texA.tex, 0);
     this.bindTexture(this.progComposite, "uBlur", texC.tex, 1);
+    this.bindTexture(this.progComposite, "uText", this.textTex, 2);
+    this.bindTexture(this.progComposite, "uPaint", this.paintTex, 3);
     this.setCompositeUniforms(params, w, h);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
@@ -200,6 +233,8 @@ export class GrainroomRenderer {
     this.targets = [];
     if (this.sourceTex) gl.deleteTexture(this.sourceTex);
     gl.deleteTexture(this.curveTex);
+    gl.deleteTexture(this.textTex);
+    gl.deleteTexture(this.paintTex);
     gl.deleteProgram(this.progAdjust);
     gl.deleteProgram(this.progBlur);
     gl.deleteProgram(this.progComposite);
@@ -231,6 +266,160 @@ export class GrainroomRenderer {
     gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.uniform1i(gl.getUniformLocation(prog, name), unit);
+  }
+
+  /**
+   * Renders the caption into a texture the size of the output.
+   *
+   * Type is drawn at the resolution it will be seen at, so the preview and a
+   * full-resolution export are the same shapes rather than one being a scaled
+   * copy of the other. The work is skipped whenever nothing that affects the
+   * result has changed, which is almost every frame of a slider drag.
+   */
+  private ensureText(p: LookParams, w: number, h: number) {
+    const gl = this.gl;
+    const key = p.text.trim()
+      ? [p.text, w, h, p.textX, p.textY, p.textSize, p.textTone, p.textFamily].join(
+          "|"
+        )
+      : "";
+    if (key === this.textKey) return;
+    this.textKey = key;
+
+    gl.bindTexture(gl.TEXTURE_2D, this.textTex);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+
+    if (!key) {
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        1,
+        1,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        new Uint8Array([0, 0, 0, 0])
+      );
+      return;
+    }
+
+    const canvas = this.textCanvas ?? document.createElement("canvas");
+    this.textCanvas = canvas;
+    canvas.width = w;
+    canvas.height = h;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, w, h);
+
+    const px = Math.max(6, p.textSize * h);
+    ctx.font = `${px}px ${TEXT_FAMILIES[p.textFamily]}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    const tone = Math.round(p.textTone * 255);
+    ctx.fillStyle = `rgb(${tone}, ${tone}, ${tone})`;
+    // A shadow the opposite way from the fill: white type over a bright sky
+    // is unreadable otherwise, and this is cheaper than asking for an outline.
+    ctx.shadowColor = p.textTone > 0.5 ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.4)";
+    ctx.shadowBlur = px * 0.18;
+
+    const lines = p.text.split("\n");
+    const step = px * 1.25;
+    const top = p.textY * h - ((lines.length - 1) * step) / 2;
+    lines.forEach((line, i) => ctx.fillText(line, p.textX * w, top + i * step));
+
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+  }
+
+  /**
+   * Rasterises the brush marks into a mask at the output resolution.
+   *
+   * A canvas cannot accumulate a negative number, so each dab is drawn
+   * additively with its strength in the alpha channel and its kind in the
+   * colour: red dodges, green burns, blue saturates, and black desaturates.
+   * Because the browser stores colour premultiplied, reading the texture back
+   * unpremultiplied turns each channel into that kind's share of the total
+   * strength — so multiplying a channel by alpha recovers exactly how much of
+   * it was laid down, and the black share is whatever the colours do not
+   * account for. The shader subtracts the pairs into signed adjustments.
+   *
+   * The stamps are positioned by running each mark through the same framing
+   * maths the shader uses, so painted work stays where it was put when the
+   * photo is later cropped or turned.
+   */
+  private ensurePaint(p: LookParams, w: number, h: number) {
+    const gl = this.gl;
+    const key = p.strokes.length
+      ? `${w}x${h}|${p.quarterTurns}|${p.cropX},${p.cropY},${p.cropW},${p.cropH}` +
+        `|${p.straighten}|${p.expand}|${p.flipH}${p.flipV}|${p.strokes.length}` +
+        // The count plus both ends of the list: cheap to compare every frame,
+        // and it cannot miss an edit that changed what is actually painted.
+        `|${JSON.stringify(p.strokes[0])}|${JSON.stringify(p.strokes[p.strokes.length - 1])}`
+      : "";
+    if (key === this.paintKey) return;
+    this.paintKey = key;
+
+    gl.bindTexture(gl.TEXTURE_2D, this.paintTex);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+
+    if (!key) {
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        1,
+        1,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        new Uint8Array([0, 0, 0, 0])
+      );
+      return;
+    }
+
+    const canvas = this.paintCanvas ?? document.createElement("canvas");
+    this.paintCanvas = canvas;
+    // The mask is soft by nature, so half resolution costs nothing visible
+    // and keeps a long session of painting off the critical path.
+    canvas.width = Math.max(1, Math.round(w / 2));
+    canvas.height = Math.max(1, Math.round(h / 2));
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.globalCompositeOperation = "lighter";
+
+    for (const s of p.strokes) {
+      const at = sourceToFrame(p, s, this.imageWidth, this.imageHeight);
+      const radius = (s.r / (p.cropH * expandFactor(p))) * canvas.height;
+      if (radius < 0.5) continue;
+
+      const x = at.x * canvas.width;
+      const y = at.y * canvas.height;
+      const strength = Math.min(Math.abs(s.amount), 1);
+      const hue =
+        s.mode === "light"
+          ? s.amount > 0
+            ? "255, 0, 0"
+            : "0, 255, 0"
+          : s.amount > 0
+          ? "0, 0, 255"
+          : "0, 0, 0";
+
+      const grad = ctx.createRadialGradient(x, y, 0, x, y, radius);
+      grad.addColorStop(0, `rgba(${hue}, ${strength})`);
+      // Falls to the same colour at zero alpha, not to transparent black, so
+      // overlapping dabs of different kinds keep their shares separate.
+      grad.addColorStop(1, `rgba(${hue}, 0)`);
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
   }
 
   private uploadCurves(params: LookParams) {
@@ -293,6 +482,14 @@ export class GrainroomRenderer {
     gl.uniform4fv(u("uPointA"), a);
     gl.uniform4fv(u("uPointB"), b);
 
+    const heals = Math.min(p.heals.length, MAX_HEALS);
+    const h = new Float32Array(MAX_HEALS * 4);
+    for (let i = 0; i < heals; i++) {
+      h.set([p.heals[i].x, p.heals[i].y, p.heals[i].r, 0], i * 4);
+    }
+    gl.uniform1i(u("uHealCount"), heals);
+    gl.uniform4fv(u("uHeal"), h);
+
     gl.uniform1fv(u("uHueShift"), new Float32Array(p.hueShift));
     gl.uniform1fv(u("uSatShift"), new Float32Array(p.satShift));
     gl.uniform1fv(u("uLumShift"), new Float32Array(p.lumShift));
@@ -310,6 +507,8 @@ export class GrainroomRenderer {
     gl.uniform1f(u("uVignetteFalloff"), p.vignetteFalloff);
     gl.uniform2f(u("uBorder"), p.borderWidth, p.borderTone);
     gl.uniform3f(u("uPortrait"), p.skinSmooth, p.faceSpotlight, p.eyeClarity);
+    gl.uniform1f(u("uTextOpacity"), p.text.trim() ? p.textOpacity : 0);
+    gl.uniform1f(u("uPaintOn"), p.strokes.length ? 1 : 0);
   }
 }
 

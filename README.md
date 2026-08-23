@@ -97,9 +97,9 @@ Encoded base64url, a Look fits comfortably in a URL or a QR code.
 
 ## What runs today
 
-Tune Image, White Balance, Selective, Details, Dehaze, Lens Blur, Tonality,
-Grain, Glow, Split Tone, Colour HSL, Black & White, Crop & Rotate, Expand,
-Perspective, Portrait, Frames, and the curve engine. Export to JPEG, PNG or
+Tune Image, White Balance, Selective, Brush, Healing, Details, Dehaze, Lens
+Blur, Tonality, Grain, Glow, Split Tone, Text, Colour HSL, Black & White,
+Crop & Rotate, Expand, Perspective, Portrait, Frames, and the curve engine. Export to JPEG, PNG or
 WebP at full resolution or a capped long edge.
 
 Geometry — crop, quarter turns, straighten, keystone, expand — is folded into
@@ -112,15 +112,18 @@ cropping or turning the photo afterwards leaves each point on the feature it
 was placed on. Each one holds to tones like the one underneath it, which is
 what stops brightening a face from dragging the wall behind it along too.
 
+Brush, Healing and Text ship as marks rather than as bitmaps: brush dabs and
+healing patches are stored as coordinates in the source image, and the caption
+is drawn into a texture at output resolution. A fully worked Look still fits
+in a link, and the preview and the export are the same pixels rather than two
+renderers that agree most of the time.
+
 ## What does not yet
 
-Brush, Healing, Cut Out, Double Exposure, Text, RAW Develop. These are listed
-in the editor's tool panel rather than hidden, because a roadmap you cannot see
-is a marketing document.
-
-Four of those six are painted or need a second image, and neither survives the
-rule that a Look is a small, portable, deterministic recipe. They will arrive
-alongside a way to carry a mask, not by quietly bloating the format.
+Cut Out, Double Exposure and RAW Develop. Each needs something a Look cannot
+carry: a network call, a second photograph, or a decoder that has to run ahead
+of the pipeline. They are listed in the editor's tool panel rather than hidden,
+because a roadmap you cannot see is a marketing document.
 
 Cut Out will call the background removal service already running in
 [Removix](https://github.com/bryankwandou/removix-ai).

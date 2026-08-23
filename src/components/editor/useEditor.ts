@@ -228,6 +228,21 @@ export function useEditor() {
     [applyParams]
   );
 
+  /**
+   * A patch computed from the live parameters. Painting appends to a list
+   * many times a second, and reading that list from a render-scoped copy
+   * would drop every dab laid down since the last paint.
+   */
+  const mutateParams = useCallback(
+    (
+      fn: (current: LookParams) => Partial<LookParams>,
+      options: { commit?: boolean; label?: string } = {}
+    ) => {
+      applyParams({ ...paramsRef.current, ...fn(paramsRef.current) }, options);
+    },
+    [applyParams]
+  );
+
   const commit = useCallback(
     (label: string) => {
       applyParams(paramsRef.current, { commit: true, label });
@@ -321,6 +336,7 @@ export function useEditor() {
     params,
     setParam,
     patchParams,
+    mutateParams,
     applyParams,
     commit,
     history,

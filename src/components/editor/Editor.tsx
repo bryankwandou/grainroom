@@ -20,6 +20,9 @@ import {
   HSL_BANDS,
   CROP_RATIOS,
   MAX_SELECTIVE_POINTS,
+  MAX_STROKES,
+  MAX_HEALS,
+  TEXT_FAMILIES,
   fitCropToRatio,
   frameToSource,
   sourceToFrame,
@@ -27,6 +30,8 @@ import {
   isUnframed,
   type LookParams,
   type SelectivePoint,
+  type TextFamily,
+  type BrushMode,
 } from "@/lib/looks";
 
 /** The four things a selective point can do, in the order the drag cycles them. */
@@ -63,9 +68,19 @@ export default function Editor() {
   const [activePoint, setActivePoint] = useState(0);
   const [pointChannel, setPointChannel] = useState(0);
 
+  // Brush and Healing: settings for the next mark, not part of the Look.
+  const [brushMode, setBrushMode] = useState<BrushMode>("light");
+  const [brushAmount, setBrushAmount] = useState(0.4);
+  const [brushSize, setBrushSize] = useState(0.09);
+  const [healSize, setHealSize] = useState(0.035);
+  const lastDab = useRef<{ x: number; y: number } | null>(null);
+
   const tool = TOOLS_BY_ID.get(activeToolId) ?? TOOLS[0];
   const slider = tool.sliders[sliderIndex] ?? tool.sliders[0];
   const isSelective = activeToolId === "selective";
+  const isBrush = activeToolId === "brush";
+  const isHealing = activeToolId === "healing";
+  const isPainting = isBrush || isHealing;
 
   const notify = useCallback((msg: string) => {
     setToast(msg);
@@ -113,11 +128,73 @@ export default function Editor() {
     startValue: number;
     axis: "none" | "x" | "y";
     startIndex: number;
-    mode: "slider" | "point";
+    mode: "slider" | "point" | "paint";
   } | null>(null);
+
+  /** Frame coordinates of a pointer event over the canvas. */
+  const frameUV = (e: React.PointerEvent) => {
+    const rect = (e.target as HTMLElement).getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) / rect.width,
+      y: (e.clientY - rect.top) / rect.height,
+    };
+  };
+
+  const dab = (uv: { x: number; y: number }) => {
+    if (!ed.imageSize) return;
+    const src = frameToSource(ed.params, uv, ed.imageSize.w, ed.imageSize.h);
+    if (src.x < 0 || src.x > 1 || src.y < 0 || src.y > 1) return;
+    ed.mutateParams((p) =>
+      // At the ceiling the brush stops rather than dropping the oldest dab:
+      // painting that quietly erases earlier painting is worse than a brush
+      // that visibly runs out.
+      p.strokes.length >= MAX_STROKES
+        ? {}
+        : {
+            strokes: [
+              ...p.strokes,
+              {
+                x: src.x,
+                y: src.y,
+                r: brushSize,
+                amount: brushAmount,
+                mode: brushMode,
+              },
+            ],
+          }
+    );
+    lastDab.current = uv;
+  };
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (!ed.isReady) return;
+
+    if (isPainting && ed.imageSize) {
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      const uv = frameUV(e);
+      if (isHealing) {
+        const src = frameToSource(ed.params, uv, ed.imageSize.w, ed.imageSize.h);
+        if (ed.params.heals.length >= MAX_HEALS) {
+          notify("Eight marks at once is the limit.");
+          return;
+        }
+        ed.mutateParams(
+          (p) => ({ heals: [...p.heals, { x: src.x, y: src.y, r: healSize }] }),
+          { commit: true, label: "Healing" }
+        );
+        return;
+      }
+      dragRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+        startValue: 0,
+        axis: "x",
+        startIndex: 0,
+        mode: "paint",
+      };
+      dab(uv);
+      return;
+    }
 
     // Selective works the way it does in a darkroom: put a finger on the part
     // of the print you mean, then adjust. A tap either picks up a point that
@@ -180,6 +257,16 @@ export default function Editor() {
     const d = dragRef.current;
     if (!d) return;
 
+    if (d.mode === "paint") {
+      const uv = frameUV(e);
+      const last = lastDab.current;
+      // A dab every third of a radius: dense enough to read as a stroke,
+      // sparse enough that a slow drag does not fill the Look with marks.
+      const step = brushSize * 0.34;
+      if (!last || Math.hypot(uv.x - last.x, uv.y - last.y) > step) dab(uv);
+      return;
+    }
+
     if (d.mode === "point") {
       const dx = e.clientX - d.x;
       const dy = e.clientY - d.y;
@@ -234,6 +321,12 @@ export default function Editor() {
   const onPointerUp = () => {
     const d = dragRef.current;
     dragRef.current = null;
+    lastDab.current = null;
+    if (d?.mode === "paint") {
+      // One history step for the whole stroke, not one per dab.
+      ed.commit(brushMode === "light" ? "Brush · light" : "Brush · colour");
+      return;
+    }
     if (d?.axis !== "x") return;
     if (d.mode === "point") {
       ed.commit(`Selective · ${POINT_CHANNELS[pointChannel].label}`);
@@ -582,6 +675,26 @@ export default function Editor() {
                 onSelectChannel={setPointChannel}
                 onPointChange={updatePoint}
                 onRemovePoint={removePoint}
+                brush={{
+                  mode: brushMode,
+                  amount: brushAmount,
+                  size: brushSize,
+                  healSize,
+                  onMode: setBrushMode,
+                  onAmount: setBrushAmount,
+                  onSize: setBrushSize,
+                  onHealSize: setHealSize,
+                  onClear: () =>
+                    ed.patchParams(
+                      { strokes: [] },
+                      { commit: true, label: "Brush cleared" }
+                    ),
+                  onClearHeals: () =>
+                    ed.patchParams(
+                      { heals: [] },
+                      { commit: true, label: "Healing cleared" }
+                    ),
+                }}
               />
             )}
             {panel === "stack" && (
@@ -663,6 +776,7 @@ function ToolsPanel({
   onSelectChannel,
   onPointChange,
   onRemovePoint,
+  brush,
 }: {
   grouped: Map<ToolGroup, Tool[]>;
   activeToolId: string;
@@ -689,6 +803,7 @@ function ToolsPanel({
     commit?: boolean
   ) => void;
   onRemovePoint: (i: number) => void;
+  brush: BrushSettings;
 }) {
   return (
     <div className="p-3">
@@ -739,6 +854,29 @@ function ToolsPanel({
             <BWControls params={params} onChange={onChange} onCommit={onCommit} />
           )}
           {tool.id === "curves" && <CurvesNote />}
+          {tool.id === "brush" && (
+            <BrushControls
+              mode={brush.mode}
+              amount={brush.amount}
+              size={brush.size}
+              painted={params.strokes.length}
+              onMode={brush.onMode}
+              onAmount={brush.onAmount}
+              onSize={brush.onSize}
+              onUndoStroke={brush.onClear}
+            />
+          )}
+          {tool.id === "healing" && (
+            <HealControls
+              size={brush.healSize}
+              marks={params.heals.length}
+              onSize={brush.onHealSize}
+              onClear={brush.onClearHeals}
+            />
+          )}
+          {tool.id === "text" && (
+            <TextControls params={params} onChange={onChange} onCommit={onCommit} />
+          )}
           {tool.id === "selective" && (
             <SelectiveControls
               points={params.points}
@@ -976,6 +1114,199 @@ function BWControls({
       <p className="text-[10px] leading-snug text-paper-400/80">
         A colour filter over black and white film darkens its opposite. The red
         preset is what makes a blue sky go dramatic.
+      </p>
+    </div>
+  );
+}
+
+/** Brush and Healing settings. These describe the next mark, not the Look. */
+interface BrushSettings {
+  mode: BrushMode;
+  amount: number;
+  size: number;
+  healSize: number;
+  onMode: (m: BrushMode) => void;
+  onAmount: (v: number) => void;
+  onSize: (v: number) => void;
+  onHealSize: (v: number) => void;
+  onClear: () => void;
+  onClearHeals: () => void;
+}
+
+function BrushControls({
+  mode,
+  amount,
+  size,
+  painted,
+  onMode,
+  onAmount,
+  onSize,
+  onUndoStroke,
+}: {
+  mode: BrushMode;
+  amount: number;
+  size: number;
+  painted: number;
+  onMode: (m: BrushMode) => void;
+  onAmount: (v: number) => void;
+  onSize: (v: number) => void;
+  onUndoStroke: () => void;
+}) {
+  return (
+    <div className="space-y-3 px-1.5 pt-1">
+      <div className="flex gap-1">
+        {(
+          [
+            { key: "light", label: "Light" },
+            { key: "saturation", label: "Colour" },
+          ] as const
+        ).map((m) => (
+          <button
+            key={m.key}
+            onClick={() => onMode(m.key)}
+            className={`focus-ring flex-1 rounded border px-1.5 py-1 text-[10px] transition ${
+              mode === m.key
+                ? "border-amber-500/70 bg-amber-500/10 text-amber-200"
+                : "border-ink-600 text-paper-300 hover:border-ink-500"
+            }`}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+
+      <FrameSlider
+        label={mode === "light" ? "Dodge and burn" : "Saturate and mute"}
+        value={amount}
+        min={-1}
+        max={1}
+        readout={`${amount > 0 ? "+" : ""}${Math.round(amount * 100)}`}
+        onChange={onAmount}
+        onRelease={() => {}}
+      />
+      <FrameSlider
+        label="Brush size"
+        value={size}
+        min={0.02}
+        max={0.3}
+        readout={`${Math.round(size * 100)}`}
+        onChange={onSize}
+        onRelease={() => {}}
+      />
+
+      <div className="flex items-center justify-between">
+        <span className="tabular text-[10px] text-paper-400">
+          {painted} of {MAX_STROKES} marks
+        </span>
+        <button
+          disabled={painted === 0}
+          onClick={onUndoStroke}
+          className="focus-ring rounded border border-ink-600 px-1.5 py-1 text-[10px] text-paper-400 transition hover:border-amber-600/50 hover:text-amber-200 disabled:opacity-35"
+        >
+          Clear painting
+        </button>
+      </div>
+
+      <p className="text-[10px] leading-snug text-paper-400/80">
+        Drag across the photo to paint. Dodging holds the highlights and
+        burning holds the shadows, so a heavy hand runs out of room instead of
+        blocking up — the same limit the paper has.
+      </p>
+    </div>
+  );
+}
+
+function HealControls({
+  size,
+  marks,
+  onSize,
+  onClear,
+}: {
+  size: number;
+  marks: number;
+  onSize: (v: number) => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="space-y-3 px-1.5 pt-1">
+      <FrameSlider
+        label="Patch size"
+        value={size}
+        min={0.008}
+        max={0.09}
+        readout={`${Math.round(size * 1000) / 10}`}
+        onChange={onSize}
+        onRelease={() => {}}
+      />
+      <div className="flex items-center justify-between">
+        <span className="tabular text-[10px] text-paper-400">
+          {marks} of {MAX_HEALS} marks
+        </span>
+        <button
+          disabled={marks === 0}
+          onClick={onClear}
+          className="focus-ring rounded border border-ink-600 px-1.5 py-1 text-[10px] text-paper-400 transition hover:border-amber-600/50 hover:text-amber-200 disabled:opacity-35"
+        >
+          Clear marks
+        </button>
+      </div>
+      <p className="text-[10px] leading-snug text-paper-400/80">
+        Tap a blemish to fill it in from the ring of pixels around it. It takes
+        out a spot on skin or a sensor mark on a sky; it cannot invent detail
+        that was never there, so keep the patch smaller than the thing it sits
+        on.
+      </p>
+    </div>
+  );
+}
+
+function TextControls({
+  params,
+  onChange,
+  onCommit,
+}: {
+  params: LookParams;
+  onChange: (key: keyof LookParams, value: never) => void;
+  onCommit: (label: string) => void;
+}) {
+  const families: { key: TextFamily; label: string }[] = [
+    { key: "sans", label: "Sans" },
+    { key: "serif", label: "Serif" },
+    { key: "mono", label: "Mono" },
+  ];
+
+  return (
+    <div className="space-y-2.5 px-1.5 pt-1">
+      <textarea
+        value={params.text}
+        rows={2}
+        placeholder="Type a caption"
+        onChange={(e) => onChange("text", e.target.value as never)}
+        onBlur={() => onCommit("Text")}
+        className="focus-ring w-full resize-none rounded-md border border-ink-600 bg-ink-900 px-2 py-1.5 text-[11px] text-paper-200 placeholder:text-paper-400/60"
+      />
+      <div className="flex gap-1">
+        {families.map((f) => (
+          <button
+            key={f.key}
+            onClick={() => {
+              onChange("textFamily", f.key as never);
+              onCommit(`Text · ${f.label}`);
+            }}
+            className={`focus-ring flex-1 rounded border px-1.5 py-1 text-[10px] transition ${
+              params.textFamily === f.key
+                ? "border-amber-500/70 bg-amber-500/10 text-amber-200"
+                : "border-ink-600 text-paper-300 hover:border-ink-500"
+            }`}
+            style={{ fontFamily: TEXT_FAMILIES[f.key] }}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+      <p className="text-[10px] leading-snug text-paper-400/80">
+        The caption is drawn at the size the file will be saved at, not scaled
+        up from the preview, so the edges stay clean at full resolution.
       </p>
     </div>
   );
@@ -1417,6 +1748,27 @@ function StackPanel({
         <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-paper-400">
           Current Look
         </h3>
+        {(params.strokes.length > 0 || params.heals.length > 0) && (
+          <div className="mb-2 rounded-md border border-ink-700 p-2">
+            <p className="text-[11px] font-medium text-paper-200">Painted</p>
+            <p className="mt-1 text-[10px] text-paper-400">
+              {[
+                params.strokes.length && `${params.strokes.length} brush marks`,
+                params.heals.length && `${params.heals.length} healed spots`,
+              ]
+                .filter(Boolean)
+                .join(", ")}
+            </p>
+          </div>
+        )}
+        {params.text.trim() && (
+          <div className="mb-2 rounded-md border border-ink-700 p-2">
+            <p className="text-[11px] font-medium text-paper-200">Text</p>
+            <p className="mt-1 truncate text-[10px] text-paper-400">
+              “{params.text.replace(/\n/g, " ")}”
+            </p>
+          </div>
+        )}
         {params.points.length > 0 && (
           <div className="mb-2 rounded-md border border-ink-700 p-2">
             <p className="text-[11px] font-medium text-paper-200">Selective</p>
@@ -1436,7 +1788,11 @@ function StackPanel({
           </div>
         )}
         {touched.length === 0 ? (
-          isUnframed(params) && params.points.length === 0 ? (
+          isUnframed(params) &&
+          params.points.length === 0 &&
+          params.strokes.length === 0 &&
+          params.heals.length === 0 &&
+          !params.text.trim() ? (
             <p className="text-[11px] text-paper-400">
               Nothing applied yet. The photo is untouched.
             </p>

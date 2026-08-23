@@ -119,6 +119,20 @@ export const TOOLS: Tool[] = [
     sliders: [],
   },
   {
+    id: "brush",
+    name: "Brush",
+    group: "tune",
+    blurb: "Paint light or colour into one part of the frame by hand.",
+    sliders: [],
+  },
+  {
+    id: "healing",
+    name: "Healing",
+    group: "detail",
+    blurb: "Fill a blemish in from the ring of pixels around it.",
+    sliders: [],
+  },
+  {
     id: "details",
     name: "Details",
     group: "detail",
@@ -234,6 +248,60 @@ export const TOOLS: Tool[] = [
     ],
   },
   {
+    id: "text",
+    name: "Text",
+    group: "creative",
+    blurb: "A caption, drawn into the frame at export resolution.",
+    sliders: [
+      {
+        key: "textSize",
+        label: "Size",
+        min: 0.02,
+        max: 0.3,
+        neutral: 0.06,
+        step: 0.002,
+        format: "percent",
+      },
+      {
+        key: "textX",
+        label: "Across",
+        min: 0,
+        max: 1,
+        neutral: 0.5,
+        step: 0.005,
+        format: "percent",
+      },
+      {
+        key: "textY",
+        label: "Down",
+        min: 0,
+        max: 1,
+        neutral: 0.88,
+        step: 0.005,
+        format: "percent",
+      },
+      {
+        key: "textTone",
+        label: "Tone",
+        min: 0,
+        max: 1,
+        neutral: 1,
+        step: 0.01,
+        format: "percent",
+        hint: "Type carries a shadow the opposite way, so it stays readable.",
+      },
+      {
+        key: "textOpacity",
+        label: "Opacity",
+        min: 0,
+        max: 1,
+        neutral: 1,
+        step: 0.01,
+        format: "percent",
+      },
+    ],
+  },
+  {
     id: "expand",
     name: "Expand",
     group: "geometry",
@@ -299,14 +367,30 @@ export const TOOLS: Tool[] = [
 
 export const TOOLS_BY_ID = new Map(TOOLS.map((t) => [t.id, t]));
 
-/** Tools shipping after the current milestone. Listed so the gaps are visible. */
+/**
+ * What is left, and why each one is left.
+ *
+ * All three need something a Look cannot carry today: a network call, a
+ * second photograph, or a decoder that has to run before any of this does.
+ * They are listed rather than hidden because a roadmap nobody can see is a
+ * marketing document.
+ */
 export const ROADMAP_TOOLS: { name: string; group: ToolGroup; note: string }[] = [
-  { name: "Brush", group: "tune", note: "Painted dodge, burn and saturation" },
-  { name: "Healing", group: "detail", note: "Patch-based blemish removal" },
-  { name: "Cut Out", group: "portrait", note: "Subject isolation via Removix" },
-  { name: "Double Exposure", group: "creative", note: "Layer blending modes" },
-  { name: "Text", group: "creative", note: "Typography overlays" },
-  { name: "RAW Develop", group: "tune", note: "Demosaic in WASM" },
+  {
+    name: "Cut Out",
+    group: "portrait",
+    note: "Needs the Removix service, so it cannot run offline",
+  },
+  {
+    name: "Double Exposure",
+    group: "creative",
+    note: "Needs a second photo, which a portable Look cannot carry",
+  },
+  {
+    name: "RAW Develop",
+    group: "tune",
+    note: "Needs a demosaic step ahead of the pipeline",
+  },
 ];
 
 /* ------------------------------------------------------------------ */
