@@ -239,14 +239,17 @@ export function decodeLookRecord(
   o += 32;
 
   // Option<Pubkey>: a one-byte tag, then the key only when the tag is 1.
+  // The account is sized for the Some case, but Borsh writes nothing after
+  // the tag for None, so the read has to step over the key conditionally.
+  // Advancing unconditionally shifts every later field by 32 bytes and
+  // turns a root Look into plausible-looking nonsense.
   const hasParent = data[o] === 1;
   o += 1;
   let parent: PublicKey | null = null;
   if (hasParent) {
     parent = new PublicKey(data.slice(o, o + 32));
+    o += 32;
   }
-  // Borsh reserves the full payload either way inside a fixed-size account.
-  o += 32;
 
   const depth = data[o];
   o += 1;

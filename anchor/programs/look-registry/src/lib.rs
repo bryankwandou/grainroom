@@ -203,6 +203,15 @@ pub mod look_registry {
             expected_parent = ancestor.parent;
         }
 
+        // The loop above only inspects the accounts it was handed, so on its
+        // own it verifies nothing: a buyer who supplies an empty list walks
+        // no chain at all and the whole payment lands with the seller. The
+        // walk has to have arrived at a root for the split to be honest.
+        require!(
+            expected_parent.is_none(),
+            RegistryError::LineageIncomplete
+        );
+
         // Anything not claimed by an ancestor belongs to the seller.
         let remainder = amount
             .checked_sub(distributed)
@@ -421,6 +430,8 @@ pub enum RegistryError {
     LineageMismatch,
     #[msg("More ancestor accounts were supplied than the lineage contains.")]
     LineageOverrun,
+    #[msg("The ancestor chain stops short of the root, so an author would be skipped.")]
+    LineageIncomplete,
     #[msg("Royalties would consume the entire payment.")]
     RoyaltiesExceedPayment,
     #[msg("The seller account is not the author of this Look.")]

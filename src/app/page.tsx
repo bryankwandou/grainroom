@@ -141,6 +141,25 @@ export default function Home() {
         </div>
       </section>
 
+      {/* --------------------------- registry ------------------------- */}
+      <section className="border-b border-ink-800 px-5 py-16 sm:py-20">
+        <div className="mx-auto max-w-6xl">
+          <SectionLabel>The registry, running on devnet</SectionLabel>
+          <h2 className="mt-3 max-w-2xl text-[1.75rem] font-semibold leading-tight tracking-[-0.02em] text-paper-100 sm:text-4xl">
+            A preset sold as a file cannot prove where it came from.
+          </h2>
+          <p className="mt-4 max-w-2xl text-[15px] leading-relaxed text-paper-300">
+            Copy a preset and the copy is indistinguishable from the original.
+            That is why grades get passed around uncredited and why nobody
+            upstream ever sees anything. A Look carries its parent, and the
+            program settles every author in the chain inside the same
+            transaction that pays the seller.
+          </p>
+
+          <Registry />
+        </div>
+      </section>
+
       {/* --------------------------- toolset -------------------------- */}
       <section className="border-b border-ink-800 px-5 py-16 sm:py-20">
         <div className="mx-auto max-w-6xl">
@@ -306,6 +325,89 @@ function SiteFooter() {
         </a>
       </div>
     </footer>
+  );
+}
+
+const PROGRAM_ID = "14a2jErBjHQv7fD64F6P1nLt6LXCsKgiyoi1c4mkyfaE";
+
+function Registry() {
+  const instructions = [
+    {
+      name: "register_look",
+      d: "Claims a grade. The hash is the account address, so the first claim on a given set of settings is the only one that fits.",
+    },
+    {
+      name: "register_derivative",
+      d: "Claims a grade built on another. The parent must already exist, and its fork count goes up in the same call.",
+    },
+    {
+      name: "purchase",
+      d: "Pays the seller and every ancestor at once. The chain is walked and checked, not taken on trust.",
+    },
+    {
+      name: "withdraw",
+      d: "Moves collected royalties to the author. Rent stays behind so the record outlives the payout.",
+    },
+  ];
+
+  return (
+    <div className="mt-10 grid gap-4 lg:grid-cols-[1fr_1.1fr]">
+      <div className="rounded-xl border border-ink-800 bg-ink-800/40 p-5">
+        <p className="text-[10px] uppercase tracking-wider text-paper-400">
+          Program id
+        </p>
+        <a
+          href={`https://explorer.solana.com/address/${PROGRAM_ID}?cluster=devnet`}
+          target="_blank"
+          rel="noreferrer"
+          className="focus-ring tabular mt-2 block break-all text-[12px] leading-relaxed text-amber-300 underline-offset-2 hover:text-amber-200 hover:underline"
+        >
+          {PROGRAM_ID}
+        </a>
+
+        <dl className="mt-5 space-y-3 border-t border-ink-800 pt-5">
+          <div>
+            <dt className="text-[11px] text-paper-400">
+              What the chain never sees
+            </dt>
+            <dd className="mt-0.5 text-[13px] leading-relaxed text-paper-200">
+              The photograph. Only a 32-byte hash of the settings is published,
+              and nothing about the image can be recovered from it.
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[11px] text-paper-400">Royalty ceiling</dt>
+            <dd className="mt-0.5 text-[13px] leading-relaxed text-paper-200">
+              Ten percent per author, eight generations deep. A long chain of
+              ancestors can never swallow the payment before it reaches the
+              person who did the most recent work.
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[11px] text-paper-400">Check it yourself</dt>
+            <dd className="tabular mt-1 rounded-md border border-ink-700 bg-ink-900 px-2.5 py-2 text-[11px] leading-relaxed text-paper-300">
+              node anchor/scripts/verify-devnet.js
+            </dd>
+          </div>
+        </dl>
+      </div>
+
+      <ul className="grid gap-3 sm:grid-cols-2">
+        {instructions.map((i) => (
+          <li
+            key={i.name}
+            className="rounded-xl border border-ink-800 bg-ink-800/40 p-5"
+          >
+            <p className="tabular text-[13px] font-medium text-amber-400">
+              {i.name}
+            </p>
+            <p className="mt-1.5 text-[12px] leading-relaxed text-paper-400">
+              {i.d}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
