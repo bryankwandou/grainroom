@@ -80,13 +80,19 @@ export function ChainPanel({
   /* Hash the settings in hand                                       */
   /* -------------------------------------------------------------- */
 
+  // Settled on a delay rather than run per change: painting emits a new
+  // parameter set several times a second, and every one of those would
+  // otherwise be a hash and a devnet lookup for a Look nobody has finished.
   useEffect(() => {
     let live = true;
-    hashParams(params).then((h) => {
-      if (live) setLookId(h);
-    });
+    const timer = window.setTimeout(() => {
+      hashParams(params).then((h) => {
+        if (live) setLookId(h);
+      });
+    }, 250);
     return () => {
       live = false;
+      window.clearTimeout(timer);
     };
   }, [params]);
 
