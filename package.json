@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "check:shaders": "node scripts/check-shaders.js"
+    "check:shaders": "node scripts/check-shaders.js",
+    "check:pipeline": "node scripts/check-pipeline.js"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",

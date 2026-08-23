@@ -16,7 +16,12 @@ export const VERT = /* glsl */ `#version 300 es
 in vec2 aPos;
 out vec2 vUV;
 void main() {
-  vUV = aPos * 0.5 + 0.5;
+  // Clip space counts upward and every image the pipeline touches counts
+  // downward: the first row of a texture, the first row of the canvas the
+  // caption is drawn on, and the y of a pointer event are all the top. The
+  // flip belongs here, once, rather than as an upload flag on each texture
+  // and a sign change in every coordinate that crosses between the two.
+  vUV = vec2(aPos.x * 0.5 + 0.5, 0.5 - aPos.y * 0.5);
   gl_Position = vec4(aPos, 0.0, 1.0);
 }`;
 
@@ -309,6 +314,11 @@ uniform vec2 uDirection;   // texel step, already scaled by radius
 uniform float uRadius;
 
 void main() {
+  // Reading a render target undoes the flip the vertex stage applied when it
+  // was written: clip space counts up, vUV counts down, and one pass writing
+  // and another reading is exactly where the two conventions meet.
+  vec2 tUV = vec2(vUV.x, 1.0 - vUV.y);
+
   // 9-tap gaussian. Weights are the normalised binomial row.
   float w[5];
   w[0] = 0.2270270270;
@@ -317,11 +327,11 @@ void main() {
   w[3] = 0.0540540541;
   w[4] = 0.0162162162;
 
-  vec3 sum = texture(uImage, vUV).rgb * w[0];
+  vec3 sum = texture(uImage, tUV).rgb * w[0];
   for (int i = 1; i < 5; i++) {
     vec2 off = uDirection * float(i) * uRadius;
-    sum += texture(uImage, vUV + off).rgb * w[i];
-    sum += texture(uImage, vUV - off).rgb * w[i];
+    sum += texture(uImage, tUV + off).rgb * w[i];
+    sum += texture(uImage, tUV - off).rgb * w[i];
   }
   fragColor = vec4(sum, 1.0);
 }`;
@@ -360,8 +370,11 @@ float hash(vec2 p) {
 }
 
 void main() {
-  vec3 sharp = texture(uImage, vUV).rgb;
-  vec3 blur = texture(uBlur, vUV).rgb;
+  // Both of these are render targets, so they are read the other way up from
+  // the caption and the paint mask, which arrive as ordinary images.
+  vec2 tUV = vec2(vUV.x, 1.0 - vUV.y);
+  vec3 sharp = texture(uImage, tUV).rgb;
+  vec3 blur = texture(uBlur, tUV).rgb;
   vec3 c = sharp;
 
   // --- lens blur: swap toward the low-pass copy ---

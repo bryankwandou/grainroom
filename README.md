@@ -74,6 +74,20 @@ links all three programs against the same sources the app imports, and lists
 the uniforms that survived linking — a uniform the renderer sets but the
 linker dropped looks exactly like a tool that quietly does nothing.
 
+`npm run check:pipeline` goes further and asserts behaviour. It bundles the
+renderer from source, paints a synthetic photograph — two colours and one
+blemish — and reads the rendered pixels back the same way `toBlob()` does on
+export: a crop has to halve the output, a quarter turn has to bring the left
+half to the top, a dodging brush has to lighten what it covers, healing has to
+fill the blemish with the colour around it, and a caption has to appear where
+it was placed. Compiling was never the hard part to get right.
+
+The first thing it caught was that every photograph had been rendering upside
+down. Clip space counts upward and every image the pipeline touches counts
+downward — the first row of a texture, the first row of the canvas a caption is
+drawn on, the `y` of a pointer event — and the mismatch cancelled itself across
+the four passes, so nothing that only compiles the code could see it.
+
 ### The Look format
 
 `src/lib/looks.ts`. Parameters are serialised with keys sorted and floats fixed
