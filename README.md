@@ -142,6 +142,15 @@ because a roadmap you cannot see is a marketing document.
 Cut Out will call the background removal service already running in
 [Removix](https://github.com/bryankwandou/removix-ai).
 
+## The video
+
+`video/` is a Remotion project that imports this renderer directly. `npm run
+frames` inside it drives the real pipeline in headless Chrome and captures one
+still per Look, so the before-and-after in the film is two genuine renders of
+the same photograph rather than a mockup. For a product whose claim is that it
+works on your own machine, illustrating that with motion graphics would have
+been arguing against itself.
+
 ## Interaction notes
 
 The canvas responds to a two-axis drag: vertical movement steps through the

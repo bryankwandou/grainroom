@@ -1,0 +1,26 @@
+{
+  "name": "grainroom-video",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Marketing and submission video for Grainroom, built with Remotion.",
+  "scripts": {
+    "studio": "remotion studio",
+    "frames": "node scripts/render-frames.js",
+    "build:demo": "remotion render Demo out/grainroom-demo.mp4 --crf 18 --color-space bt709",
+    "build:twitter": "remotion render Twitter out/grainroom-twitter.mp4 --crf 18 --color-space bt709",
+    "build:vertical": "remotion render Vertical out/grainroom-vertical.mp4 --crf 18 --color-space bt709"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.373",
+    "@remotion/google-fonts": "4.0.373",
+    "@remotion/transitions": "4.0.373",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "remotion": "4.0.373"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.12",
+    "esbuild": "0.24.0",
+    "typescript": "5.6.3"
+  }
+}

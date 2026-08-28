@@ -1,0 +1,55 @@
+1
+00:00:00,300 --> 00:00:05,000
+Open a photograph. Nothing leaves the machine.
+
+2
+00:00:05,000 --> 00:00:08,500
+A preset is somebody's week of work.
+
+3
+00:00:08,500 --> 00:00:12,000
+It sells on Monday and it is in a shared folder by the weekend. Nothing in the
+file separates the copy somebody paid for from the one they did not.
+
+4
+00:00:12,000 --> 00:00:20,000
+Twenty-one tools, running on your own graphics card. Untouched, then graded.
+
+5
+00:00:20,000 --> 00:00:26,500
+The frame is part of the recipe. Crop, straighten and keystone run in the first
+pass, so grain and vignette land on the picture you keep.
+
+6
+00:00:26,500 --> 00:00:33,000
+Dodged, burned, and held to tone. Brush marks are stored as coordinates in the
+photograph, not as a bitmap, so the recipe still fits in a link.
+
+7
+00:00:33,000 --> 00:00:41,000
+The photograph stays put. Only the recipe moves — a few hundred bytes, hashed
+from its own contents.
+
+8
+00:00:41,000 --> 00:00:52,000
+The upstream author is paid in the same transaction. Out of a 0.200 SOL sale,
+0.010 goes upstream and 0.190 to the seller.
+
+9
+00:00:52,000 --> 00:00:58,000
+Leaving the first author off the transaction does not pay them less. It fails.
+
+10
+00:00:58,000 --> 00:01:02,000
+Six settlement checks against the live devnet program. Eighteen rendered
+assertions on the editing pipeline. Three shader programs compiled before
+anything ships.
+
+11
+00:01:02,000 --> 00:01:06,500
+The render test found that every photograph had been coming out upside down.
+It compiled, it typechecked, it built, and it was wrong.
+
+12
+00:01:06,500 --> 00:01:10,000
+grainroom-seven.vercel.app — running on Solana devnet.

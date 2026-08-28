@@ -6,3 +6,9 @@ anchor/.anchor
 node_modules
 .next
 *.log
+
+# The video project is its own npm workspace with a few hundred megabytes of
+# render tooling. None of it builds the site.
+video/node_modules
+video/out
+video/.remotion
