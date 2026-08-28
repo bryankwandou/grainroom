@@ -7,8 +7,7 @@ node_modules
 .next
 *.log
 
-# The video project is its own npm workspace with a few hundred megabytes of
-# render tooling. None of it builds the site.
-video/node_modules
-video/out
-video/.remotion
+# The video project is its own npm workspace with its own dependencies, and
+# none of it builds the site. Uploading part of it is worse than uploading
+# none: the build then typechecks Remotion against modules that are not there.
+video

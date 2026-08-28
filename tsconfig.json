@@ -30,5 +30,9 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  // video/ is a separate npm project with its own dependencies and its own
+  // tsconfig. Left in, the site's build tries to typecheck Remotion against
+  // node_modules that were never uploaded, and fails on a folder that has
+  // nothing to do with the site.
+  "exclude": ["node_modules", "video"]
 }
