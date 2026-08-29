@@ -76,6 +76,15 @@ export interface LookParams {
   perspectiveH: number;  // -1 .. 1
   perspectiveV: number;  // -1 .. 1
 
+  // Double exposure. The second photograph is chosen when the Look is
+  // applied, exactly as the first one is — what travels here is how to
+  // combine them, not the picture itself.
+  blendMode: BlendMode;
+  blendOpacity: number;  // 0 .. 1
+  blendScale: number;    // 0.25 .. 2, relative to the frame
+  blendX: number;        // 0 .. 1, where its centre sits
+  blendY: number;        // 0 .. 1
+
   // Text. Drawn into a texture at the output resolution and composited on the
   // GPU, so the preview and the export are the same pixels rather than two
   // different renderers that agree most of the time.
@@ -169,6 +178,43 @@ export interface HealMark {
 export const MAX_STROKES = 96;
 export const MAX_HEALS = 8;
 
+/**
+ * How a second photograph is laid over the first.
+ *
+ * These are the darkroom operations, not the whole Photoshop list: what you
+ * can do by putting one negative on top of another and changing how much
+ * light gets through.
+ */
+export type BlendMode =
+  | "off"
+  | "screen"
+  | "multiply"
+  | "overlay"
+  | "lighten"
+  | "darken"
+  | "difference";
+
+export const BLEND_MODES: { key: BlendMode; label: string; note: string }[] = [
+  { key: "off", label: "Off", note: "One photograph only." },
+  { key: "screen", label: "Screen", note: "Both exposures add up. Nothing gets darker." },
+  { key: "multiply", label: "Multiply", note: "Light has to pass through both. Nothing gets lighter." },
+  { key: "overlay", label: "Overlay", note: "Screen in the shadows, multiply in the highlights." },
+  { key: "lighten", label: "Lighten", note: "Whichever frame is brighter wins each pixel." },
+  { key: "darken", label: "Darken", note: "Whichever frame is darker wins." },
+  { key: "difference", label: "Difference", note: "What the two frames disagree about." },
+];
+
+/** The shader takes the mode as a number; this is the order it expects. */
+export const BLEND_INDEX: Record<BlendMode, number> = {
+  off: 0,
+  screen: 1,
+  multiply: 2,
+  overlay: 3,
+  lighten: 4,
+  darken: 5,
+  difference: 6,
+};
+
 export type TextFamily = "sans" | "serif" | "mono";
 
 /**
@@ -256,6 +302,11 @@ export function defaultParams(): LookParams {
     skinSmooth: 0,
     faceSpotlight: 0,
     eyeClarity: 0,
+    blendMode: "off",
+    blendOpacity: 0.55,
+    blendScale: 1,
+    blendX: 0.5,
+    blendY: 0.5,
     borderWidth: 0,
     borderTone: 1,
     points: [],

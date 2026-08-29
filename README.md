@@ -82,6 +82,22 @@ half to the top, a dodging brush has to lighten what it covers, healing has to
 fill the blemish with the colour around it, and a caption has to appear where
 it was placed. Compiling was never the hard part to get right.
 
+`npm run check:app` goes further still and opens the application. With the dev
+server running, it drives a real browser: loads a photograph through the file
+input, drags Exposure and checks the canvas actually changed, undoes it and
+checks the pixels came back, crops to a square and measures the frame, taps a
+selective point, paints a stroke, lays a second photograph over the first,
+clicks Save to device and confirms a real JPEG landed on disk. It also records
+every network request the page makes and fails if any of them leaves the
+origin — so "nothing is uploaded" is a condition the suite enforces rather than
+a sentence in this file.
+
+That one found "Back to the full frame" resetting crop and rotation but not
+expand or perspective, which left the button lit and the frame still altered.
+A broken file input, a panel that never mounts, or an export button wired to
+nothing would pass every other check here and still leave nobody able to edit a
+photograph.
+
 The first thing it caught was that every photograph had been rendering upside
 down. Clip space counts upward and every image the pipeline touches counts
 downward — the first row of a texture, the first row of the canvas a caption is
@@ -112,8 +128,9 @@ Encoded base64url, a Look fits comfortably in a URL or a QR code.
 ## What runs today
 
 Tune Image, White Balance, Selective, Brush, Healing, Details, Dehaze, Lens
-Blur, Tonality, Grain, Glow, Split Tone, Text, Colour HSL, Black & White,
-Crop & Rotate, Expand, Perspective, Portrait, Frames, and the curve engine. Export to JPEG, PNG or
+Blur, Tonality, Grain, Glow, Split Tone, Double Exposure, Text, Colour HSL,
+Black & White, Crop & Rotate, Expand, Perspective, Portrait, Frames, and the
+curve engine. Export to JPEG, PNG or
 WebP at full resolution or a capped long edge.
 
 Geometry — crop, quarter turns, straighten, keystone, expand — is folded into
@@ -134,10 +151,19 @@ renderers that agree most of the time.
 
 ## What does not yet
 
-Cut Out, Double Exposure and RAW Develop. Each needs something a Look cannot
-carry: a network call, a second photograph, or a decoder that has to run ahead
-of the pipeline. They are listed in the editor's tool panel rather than hidden,
-because a roadmap you cannot see is a marketing document.
+Cut Out and RAW Develop. One needs a call out to a background removal service,
+which would break the promise that the editor works with nothing connected; the
+other needs a decoder that runs before the pipeline does, which is a different
+piece of work rather than another tool. Both are listed in the editor's tool
+panel with those reasons attached, because a roadmap you cannot see is a
+marketing document.
+
+Double Exposure was on that list until it was reconsidered. The objection had
+been that a Look cannot carry a second photograph — but a Look never carried the
+first one either. It describes what to do with pixels it is handed, and the
+second frame is chosen when the Look is applied, exactly as the first one is.
+What travels is the blend mode, strength, scale and position; the recipe still
+fits in a link.
 
 Cut Out will call the background removal service already running in
 [Removix](https://github.com/bryankwandou/removix-ai).

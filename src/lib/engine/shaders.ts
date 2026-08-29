@@ -350,6 +350,12 @@ uniform sampler2D uText;    // caption, drawn at the output resolution
 // the three do not account for is the share that was desaturating.
 uniform sampler2D uPaint;
 
+// The second photograph of a double exposure, and where to put it: centre in
+// x and y, then scale, then how much of it to let through.
+uniform sampler2D uBlend;
+uniform int uBlendMode;
+uniform vec4 uBlendPlace;
+
 uniform vec4 uFx;    // structure, sharpen, grain, vignette
 uniform vec4 uFx2;   // bloom, halation, dehaze, lensBlur
 uniform vec2 uResolution;
@@ -480,6 +486,42 @@ void main() {
     // Film grain is strongest in the midtones, nearly absent in pure black.
     float shape = 1.0 - abs(luma(c) - 0.45) * 1.2;
     c += n * uFx.z * 0.28 * clamp(shape, 0.15, 1.0);
+  }
+
+  // --- double exposure ---
+  // Placed before the caption so type stays legible over both frames, and
+  // after the painted work so a brush stroke reads on the base photograph
+  // rather than on whatever was laid over it.
+  if (uBlendMode > 0 && uBlendPlace.w > 0.001) {
+    vec2 buv = (vUV - uBlendPlace.xy) / max(uBlendPlace.z, 0.05) + 0.5;
+    if (buv.x > 0.0 && buv.x < 1.0 && buv.y > 0.0 && buv.y < 1.0) {
+      vec4 second = texture(uBlend, buv);
+      // The adjust pass hands this stage sRGB, so the second frame is used
+      // as it arrives. Converting it would blend two different encodings and
+      // show up as a second exposure that is mysteriously too dark.
+      vec3 b = second.rgb;
+      vec3 mixed = b;
+
+      if (uBlendMode == 1) {
+        mixed = 1.0 - (1.0 - c) * (1.0 - b);
+      } else if (uBlendMode == 2) {
+        mixed = c * b;
+      } else if (uBlendMode == 3) {
+        mixed = mix(
+          2.0 * c * b,
+          1.0 - 2.0 * (1.0 - c) * (1.0 - b),
+          step(0.5, luma(c))
+        );
+      } else if (uBlendMode == 4) {
+        mixed = max(c, b);
+      } else if (uBlendMode == 5) {
+        mixed = min(c, b);
+      } else if (uBlendMode == 6) {
+        mixed = abs(c - b);
+      }
+
+      c = mix(c, clamp(mixed, 0.0, 1.0), uBlendPlace.w * second.a);
+    }
   }
 
   // --- caption, over the picture but under the border ---

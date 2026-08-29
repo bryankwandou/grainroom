@@ -3,6 +3,7 @@ import {
   MAX_STRAIGHTEN_RAD,
   MAX_SELECTIVE_POINTS,
   MAX_HEALS,
+  BLEND_INDEX,
   sourceToFrame,
   buildCurveLUT,
   expandFactor,
@@ -34,6 +35,10 @@ export class GrainroomRenderer {
   /** What the text texture currently holds, so it is not redrawn every frame. */
   private textKey = "";
   private textCanvas: HTMLCanvasElement | null = null;
+
+  private blendTex: WebGLTexture;
+  /** Whether a second photograph has actually been handed over. */
+  private hasBlend = false;
 
   private paintTex: WebGLTexture;
   private paintKey = "";
@@ -89,9 +94,11 @@ export class GrainroomRenderer {
     this.curveTex = createTexture(gl);
     this.textTex = createTexture(gl);
     this.paintTex = createTexture(gl);
+    this.blendTex = createTexture(gl);
     // One transparent pixel each, so the composite pass always has something
-    // valid bound whether or not the photo carries a caption or any painting.
-    for (const tex of [this.textTex, this.paintTex]) {
+    // valid bound whether or not the photo carries a caption, any painting,
+    // or a second exposure.
+    for (const tex of [this.textTex, this.paintTex, this.blendTex]) {
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.texImage2D(
         gl.TEXTURE_2D,
@@ -183,6 +190,7 @@ export class GrainroomRenderer {
     this.bindTexture(this.progComposite, "uBlur", texC.tex, 1);
     this.bindTexture(this.progComposite, "uText", this.textTex, 2);
     this.bindTexture(this.progComposite, "uPaint", this.paintTex, 3);
+    this.bindTexture(this.progComposite, "uBlend", this.blendTex, 4);
     this.setCompositeUniforms(params, w, h);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
@@ -235,6 +243,7 @@ export class GrainroomRenderer {
     gl.deleteTexture(this.curveTex);
     gl.deleteTexture(this.textTex);
     gl.deleteTexture(this.paintTex);
+    gl.deleteTexture(this.blendTex);
     gl.deleteProgram(this.progAdjust);
     gl.deleteProgram(this.progBlur);
     gl.deleteProgram(this.progComposite);
@@ -422,6 +431,39 @@ export class GrainroomRenderer {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
   }
 
+  /**
+   * Takes the second photograph of a double exposure.
+   *
+   * It is deliberately not part of the Look. A Look is a recipe, and a recipe
+   * that carried a photograph inside it would stop fitting in a link — the
+   * whole reason the format is worth hashing. The second frame is supplied
+   * when the Look is applied, exactly as the first one is.
+   */
+  setBlendImage(source: TexImageSource) {
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.blendTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    this.hasBlend = true;
+  }
+
+  clearBlendImage() {
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.blendTex);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      1,
+      1,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      new Uint8Array([0, 0, 0, 0])
+    );
+    this.hasBlend = false;
+  }
+
   private uploadCurves(params: LookParams) {
     const gl = this.gl;
     const lut = buildCurveLUT(params);
@@ -509,6 +551,18 @@ export class GrainroomRenderer {
     gl.uniform3f(u("uPortrait"), p.skinSmooth, p.faceSpotlight, p.eyeClarity);
     gl.uniform1f(u("uTextOpacity"), p.text.trim() ? p.textOpacity : 0);
     gl.uniform1f(u("uPaintOn"), p.strokes.length ? 1 : 0);
+
+    // A blend mode with no second photograph loaded would otherwise multiply
+    // the picture by one transparent pixel and turn the frame black.
+    const blending = this.hasBlend && p.blendMode !== "off";
+    gl.uniform1i(u("uBlendMode"), blending ? BLEND_INDEX[p.blendMode] : 0);
+    gl.uniform4f(
+      u("uBlendPlace"),
+      p.blendX,
+      p.blendY,
+      p.blendScale,
+      p.blendOpacity
+    );
   }
 }
 

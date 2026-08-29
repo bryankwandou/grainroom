@@ -21,6 +21,7 @@ import {
   CROP_RATIOS,
   MAX_SELECTIVE_POINTS,
   MAX_STROKES,
+  BLEND_MODES,
   MAX_HEALS,
   TEXT_FAMILIES,
   fitCropToRatio,
@@ -62,6 +63,9 @@ export default function Editor() {
   const [parentId, setParentId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // A second, separate input: choosing the frame to lay over the photograph
+  // must not be able to replace the photograph itself by mistake.
+  const blendInputRef = useRef<HTMLInputElement>(null);
 
   // Selective: which point the controls and the canvas drag are aimed at,
   // and which of its four values that drag moves.
@@ -504,6 +508,28 @@ export default function Editor() {
         }}
       />
 
+      <input
+        ref={blendInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        aria-label="Second photograph"
+        onChange={async (e) => {
+          const f = e.target.files?.[0];
+          e.target.value = "";
+          if (!f) return;
+          await ed.loadBlendFile(f);
+          // Choosing a frame and then having nothing happen would read as a
+          // failure, so a mode is turned on with it if none was set.
+          if (ed.params.blendMode === "off") {
+            ed.patchParams(
+              { blendMode: "screen" },
+              { commit: true, label: "Double exposure" }
+            );
+          }
+        }}
+      />
+
       {/* ---------------- body ---------------- */}
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         {/* stage */}
@@ -675,6 +701,17 @@ export default function Editor() {
                 onSelectChannel={setPointChannel}
                 onPointChange={updatePoint}
                 onRemovePoint={removePoint}
+                blend={{
+                  hasImage: ed.hasBlendImage,
+                  onChoose: () => blendInputRef.current?.click(),
+                  onClear: () => {
+                    ed.clearBlendImage();
+                    ed.patchParams(
+                      { blendMode: "off" },
+                      { commit: true, label: "Double exposure cleared" }
+                    );
+                  },
+                }}
                 brush={{
                   mode: brushMode,
                   amount: brushAmount,
@@ -777,6 +814,7 @@ function ToolsPanel({
   onPointChange,
   onRemovePoint,
   brush,
+  blend,
 }: {
   grouped: Map<ToolGroup, Tool[]>;
   activeToolId: string;
@@ -804,6 +842,11 @@ function ToolsPanel({
   ) => void;
   onRemovePoint: (i: number) => void;
   brush: BrushSettings;
+  blend: {
+    hasImage: boolean;
+    onChoose: () => void;
+    onClear: () => void;
+  };
 }) {
   return (
     <div className="p-3">
@@ -872,6 +915,16 @@ function ToolsPanel({
               marks={params.heals.length}
               onSize={brush.onHealSize}
               onClear={brush.onClearHeals}
+            />
+          )}
+          {tool.id === "double-exposure" && (
+            <BlendControls
+              params={params}
+              hasImage={blend.hasImage}
+              onChoose={blend.onChoose}
+              onClear={blend.onClear}
+              onChange={onChange}
+              onCommit={onCommit}
             />
           )}
           {tool.id === "text" && (
@@ -1260,6 +1313,70 @@ function HealControls({
   );
 }
 
+function BlendControls({
+  params,
+  hasImage,
+  onChoose,
+  onClear,
+  onChange,
+  onCommit,
+}: {
+  params: LookParams;
+  hasImage: boolean;
+  onChoose: () => void;
+  onClear: () => void;
+  onChange: (key: keyof LookParams, value: never) => void;
+  onCommit: (label: string) => void;
+}) {
+  return (
+    <div className="space-y-3 px-1.5 pt-1">
+      <div className="flex gap-1.5">
+        <button
+          onClick={onChoose}
+          className="focus-ring flex-1 rounded-md border border-ink-600 px-2 py-1.5 text-[11px] text-paper-200 transition hover:border-amber-500/60 hover:text-amber-200"
+        >
+          {hasImage ? "Choose a different frame" : "Choose a second photograph"}
+        </button>
+        {hasImage && (
+          <button
+            onClick={onClear}
+            className="focus-ring rounded-md border border-ink-600 px-2 py-1.5 text-[11px] text-paper-400 transition hover:border-amber-600/50 hover:text-amber-200"
+          >
+            Remove
+          </button>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-1.5">
+        {BLEND_MODES.map((m) => (
+          <button
+            key={m.key}
+            disabled={!hasImage && m.key !== "off"}
+            title={m.note}
+            onClick={() => {
+              onChange("blendMode", m.key as never);
+              onCommit(`Double exposure · ${m.label}`);
+            }}
+            className={`focus-ring rounded-md border px-2 py-1.5 text-[11px] transition disabled:opacity-30 ${
+              params.blendMode === m.key
+                ? "border-amber-500/70 bg-amber-500/10 text-amber-200"
+                : "border-ink-600 text-paper-300 hover:border-ink-500"
+            }`}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+
+      <p className="text-[10px] leading-snug text-paper-400/80">
+        {hasImage
+          ? BLEND_MODES.find((m) => m.key === params.blendMode)?.note
+          : "The second frame is chosen here rather than carried inside the Look, the same way the first one is. A Look that held a photograph would stop fitting in a link."}
+      </p>
+    </div>
+  );
+}
+
 function TextControls({
   params,
   onChange,
@@ -1616,6 +1733,11 @@ function FrameControls({
               straighten: 0,
               flipH: false,
               flipV: false,
+              // Expand and keystone are framing too. Leaving them set meant
+              // this button could not reach the state that disables it.
+              expand: 0,
+              perspectiveH: 0,
+              perspectiveV: 0,
             },
             "Framing cleared"
           )
@@ -1761,6 +1883,18 @@ function StackPanel({
             </p>
           </div>
         )}
+        {params.blendMode !== "off" && (
+          <div className="mb-2 rounded-md border border-ink-700 p-2">
+            <p className="text-[11px] font-medium text-paper-200">
+              Double exposure
+            </p>
+            <p className="mt-1 text-[10px] text-paper-400">
+              {BLEND_MODES.find((m) => m.key === params.blendMode)?.label} — the
+              second photograph travels with whoever applies this Look, not
+              inside it.
+            </p>
+          </div>
+        )}
         {params.text.trim() && (
           <div className="mb-2 rounded-md border border-ink-700 p-2">
             <p className="text-[11px] font-medium text-paper-200">Text</p>
@@ -1792,6 +1926,7 @@ function StackPanel({
           params.points.length === 0 &&
           params.strokes.length === 0 &&
           params.heals.length === 0 &&
+          params.blendMode === "off" &&
           !params.text.trim() ? (
             <p className="text-[11px] text-paper-400">
               Nothing applied yet. The photo is untouched.

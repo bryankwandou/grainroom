@@ -50,3 +50,6 @@ anchor/.anchor/
 *-keypair.json
 *.pem
 id.json
+
+# Screenshots and downloads from npm run check:app.
+.e2e

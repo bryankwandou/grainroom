@@ -46,6 +46,11 @@ export function useEditor() {
   const [cursor, setCursor] = useState(-1);
   const [imageName, setImageName] = useState<string | null>(null);
   const [imageSize, setImageSize] = useState<{ w: number; h: number } | null>(null);
+  // Whether a second photograph has been chosen for a double exposure. It
+  // lives on the renderer rather than in the Look: the Look says how to
+  // combine two frames, the same way it never carried the first one either.
+  const [hasBlendImage, setHasBlendImage] = useState(false);
+
   const [displaySize, setDisplaySize] = useState<{ w: number; h: number } | null>(
     null
   );
@@ -243,6 +248,21 @@ export function useEditor() {
     [applyParams]
   );
 
+  /** Hands a second photograph to the renderer for the double exposure. */
+  const loadBlendFile = useCallback(async (file: File) => {
+    const r = rendererRef.current;
+    if (!r) return;
+    const bitmap = await createImageBitmap(file);
+    r.setBlendImage(bitmap);
+    bitmap.close();
+    setHasBlendImage(true);
+  }, []);
+
+  const clearBlendImage = useCallback(() => {
+    rendererRef.current?.clearBlendImage();
+    setHasBlendImage(false);
+  }, []);
+
   const commit = useCallback(
     (label: string) => {
       applyParams(paramsRef.current, { commit: true, label });
@@ -355,6 +375,9 @@ export function useEditor() {
     imageName,
     imageSize,
     displaySize,
+    hasBlendImage,
+    loadBlendFile,
+    clearBlendImage,
     isReady,
     error,
     clearError: () => setError(null),
