@@ -16,7 +16,7 @@ import {
 } from "@solana/web3.js";
 
 export const PROGRAM_ID = new PublicKey(
-  "14a2jErBjHQv7fD64F6P1nLt6LXCsKgiyoi1c4mkyfaE"
+  "7kc9jwXoetCASZ3G8zF7z4si4C72KD3jza36MszyqFeC"
 );
 
 export const DEVNET_RPC = "https://api.devnet.solana.com";

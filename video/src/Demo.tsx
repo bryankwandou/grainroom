@@ -246,7 +246,7 @@ export const Demo: React.FC = () => (
         <div style={{ height: 22 }} />
         <Body delay={62} size={27} color={C.grey} width={1200}>
           <span style={{ fontFamily: mono }}>
-            devnet · 14a2jErBjHQv7fD64F6P1nLt6LXCsKgiyoi1c4mkyfaE
+            devnet · 7kc9jwXoetCASZ3G8zF7z4si4C72KD3jza36MszyqFeC
           </span>
         </Body>
       </AbsoluteFill>

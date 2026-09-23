@@ -196,6 +196,18 @@ export default function Home() {
                 <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
                 Next milestone
               </h3>
+              {ROADMAP_TOOLS.length === 0 && (
+                <div className="rounded-lg border border-dashed border-ink-700 p-4">
+                  <p className="text-[13px] font-medium text-paper-300">
+                    Nothing outstanding
+                  </p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-paper-400/70">
+                    Every tool on the original list is built. When something
+                    turns up that cannot be built yet, it gets named here with
+                    the reason, rather than kept in a private backlog.
+                  </p>
+                </div>
+              )}
               <ul className="grid gap-2 sm:grid-cols-2">
                 {ROADMAP_TOOLS.map((t) => (
                   <li
@@ -212,11 +224,11 @@ export default function Home() {
                 ))}
               </ul>
               <p className="mt-4 text-[11px] leading-relaxed text-paper-400/70">
-                What is left needs something the editor cannot do on its own
-                terms: a call out to the background removal service already
-                running in Removix, which would break working offline, or a
-                decoder that has to run before the pipeline does. Everything
-                else is finished, and all of it is local.
+                The last two were the awkward ones. Cut Out finds the subject
+                with a model that runs on your own machine, so it did not have
+                to cost the offline promise after all. RAW files are developed
+                by LibRaw compiled to WebAssembly, in a worker, before anything
+                else touches them. Neither sends your photograph anywhere.
               </p>
             </div>
           </div>
@@ -331,7 +343,7 @@ function SiteFooter() {
   );
 }
 
-const PROGRAM_ID = "14a2jErBjHQv7fD64F6P1nLt6LXCsKgiyoi1c4mkyfaE";
+const PROGRAM_ID = "7kc9jwXoetCASZ3G8zF7z4si4C72KD3jza36MszyqFeC";
 
 function Registry() {
   const instructions = [
