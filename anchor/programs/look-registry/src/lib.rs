@@ -14,7 +14,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 
-declare_id!("14a2jErBjHQv7fD64F6P1nLt6LXCsKgiyoi1c4mkyfaE");
+declare_id!("7kc9jwXoetCASZ3G8zF7z4si4C72KD3jza36MszyqFeC");
 
 /// Ceiling on a single author's cut, in basis points. Ten percent.
 /// A chain of greedy ancestors could otherwise consume the whole payment
