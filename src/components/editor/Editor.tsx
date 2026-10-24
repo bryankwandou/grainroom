@@ -22,6 +22,7 @@ import {
   MAX_SELECTIVE_POINTS,
   MAX_STROKES,
   BLEND_MODES,
+  CUTOUT_MODES,
   MAX_HEALS,
   TEXT_FAMILIES,
   fitCropToRatio,
@@ -499,7 +500,9 @@ export default function Editor() {
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        // RAW files often carry no image/* type of their own, so the picker
+        // would hide them behind "All files" if this were not spelled out.
+        accept="image/*,.arw,.cr2,.cr3,.crw,.dng,.nef,.nrw,.orf,.pef,.raf,.raw,.rw2,.sr2,.srf,.srw,.3fr,.erf,.iiq,.mef,.mos,.rwl,.x3f"
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
@@ -701,6 +704,29 @@ export default function Editor() {
                 onSelectChannel={setPointChannel}
                 onPointChange={updatePoint}
                 onRemovePoint={removePoint}
+                cutout={{
+                  hasSubject: ed.hasSubject,
+                  progress: ed.subjectProgress,
+                  onFind: async () => {
+                    const found = await ed.findSubject();
+                    // Turning a mode on with the mask is the difference
+                    // between the tool appearing to work and appearing to do
+                    // nothing at all.
+                    if (found && ed.params.cutout === "off") {
+                      ed.patchParams(
+                        { cutout: "blur" },
+                        { commit: true, label: "Cut Out · Soften" }
+                      );
+                    }
+                  },
+                  onClear: () => {
+                    ed.clearSubject();
+                    ed.patchParams(
+                      { cutout: "off" },
+                      { commit: true, label: "Cut Out cleared" }
+                    );
+                  },
+                }}
                 blend={{
                   hasImage: ed.hasBlendImage,
                   onChoose: () => blendInputRef.current?.click(),
@@ -815,6 +841,7 @@ function ToolsPanel({
   onRemovePoint,
   brush,
   blend,
+  cutout,
 }: {
   grouped: Map<ToolGroup, Tool[]>;
   activeToolId: string;
@@ -845,6 +872,12 @@ function ToolsPanel({
   blend: {
     hasImage: boolean;
     onChoose: () => void;
+    onClear: () => void;
+  };
+  cutout: {
+    hasSubject: boolean;
+    progress: string | null;
+    onFind: () => void;
     onClear: () => void;
   };
 }) {
@@ -917,6 +950,17 @@ function ToolsPanel({
               onClear={brush.onClearHeals}
             />
           )}
+          {tool.id === "cut-out" && (
+            <CutoutControls
+              params={params}
+              hasSubject={cutout.hasSubject}
+              progress={cutout.progress}
+              onFind={cutout.onFind}
+              onClear={cutout.onClear}
+              onChange={onChange}
+              onCommit={onCommit}
+            />
+          )}
           {tool.id === "double-exposure" && (
             <BlendControls
               params={params}
@@ -955,6 +999,12 @@ function ToolsPanel({
         <h3 className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-paper-400">
           Next milestone
         </h3>
+        {ROADMAP_TOOLS.length === 0 && (
+          <p className="px-1 text-[11px] leading-snug text-paper-400/70">
+            Nothing outstanding. Anything that cannot be built yet gets named
+            here, with the reason.
+          </p>
+        )}
         <ul className="space-y-1">
           {ROADMAP_TOOLS.map((r) => (
             <li
@@ -1308,6 +1358,73 @@ function HealControls({
         out a spot on skin or a sensor mark on a sky; it cannot invent detail
         that was never there, so keep the patch smaller than the thing it sits
         on.
+      </p>
+    </div>
+  );
+}
+
+function CutoutControls({
+  params,
+  hasSubject,
+  progress,
+  onFind,
+  onClear,
+  onChange,
+  onCommit,
+}: {
+  params: LookParams;
+  hasSubject: boolean;
+  progress: string | null;
+  onFind: () => void;
+  onClear: () => void;
+  onChange: (key: keyof LookParams, value: never) => void;
+  onCommit: (label: string) => void;
+}) {
+  return (
+    <div className="space-y-3 px-1.5 pt-1">
+      <div className="flex gap-1.5">
+        <button
+          disabled={Boolean(progress)}
+          onClick={onFind}
+          className="focus-ring flex-1 rounded-md border border-ink-600 px-2 py-1.5 text-[11px] text-paper-200 transition hover:border-amber-500/60 hover:text-amber-200 disabled:opacity-40"
+        >
+          {progress ?? (hasSubject ? "Find the subject again" : "Find the subject")}
+        </button>
+        {hasSubject && (
+          <button
+            onClick={onClear}
+            className="focus-ring rounded-md border border-ink-600 px-2 py-1.5 text-[11px] text-paper-400 transition hover:border-amber-600/50 hover:text-amber-200"
+          >
+            Forget
+          </button>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-1.5">
+        {CUTOUT_MODES.map((m) => (
+          <button
+            key={m.key}
+            disabled={!hasSubject && m.key !== "off"}
+            title={m.note}
+            onClick={() => {
+              onChange("cutout", m.key as never);
+              onCommit(`Cut Out · ${m.label}`);
+            }}
+            className={`focus-ring rounded-md border px-2 py-1.5 text-[11px] transition disabled:opacity-30 ${
+              params.cutout === m.key
+                ? "border-amber-500/70 bg-amber-500/10 text-amber-200"
+                : "border-ink-600 text-paper-300 hover:border-ink-500"
+            }`}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+
+      <p className="text-[10px] leading-snug text-paper-400/80">
+        {hasSubject
+          ? CUTOUT_MODES.find((m) => m.key === params.cutout)?.note
+          : "The model runs here, on this machine. It is downloaded once and then works with the network off, and the photograph is never sent anywhere for a server to look at."}
       </p>
     </div>
   );
@@ -1883,6 +2000,16 @@ function StackPanel({
             </p>
           </div>
         )}
+        {params.cutout !== "off" && (
+          <div className="mb-2 rounded-md border border-ink-700 p-2">
+            <p className="text-[11px] font-medium text-paper-200">Cut Out</p>
+            <p className="mt-1 text-[10px] text-paper-400">
+              {CUTOUT_MODES.find((m) => m.key === params.cutout)?.label} — the
+              subject is found again wherever this Look is applied, rather than
+              carried inside it.
+            </p>
+          </div>
+        )}
         {params.blendMode !== "off" && (
           <div className="mb-2 rounded-md border border-ink-700 p-2">
             <p className="text-[11px] font-medium text-paper-200">
@@ -1927,6 +2054,7 @@ function StackPanel({
           params.strokes.length === 0 &&
           params.heals.length === 0 &&
           params.blendMode === "off" &&
+          params.cutout === "off" &&
           !params.text.trim() ? (
             <p className="text-[11px] text-paper-400">
               Nothing applied yet. The photo is untouched.

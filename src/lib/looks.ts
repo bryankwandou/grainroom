@@ -76,6 +76,12 @@ export interface LookParams {
   perspectiveH: number;  // -1 .. 1
   perspectiveV: number;  // -1 .. 1
 
+  // Cut Out. The subject mask is found on the viewer's own machine and is
+  // not carried here; only what to do with the background is.
+  cutout: CutoutMode;
+  cutoutAmount: number;   // 0 .. 1
+  cutoutFeather: number;  // 0 .. 1, how softly the edge falls off
+
   // Double exposure. The second photograph is chosen when the Look is
   // applied, exactly as the first one is — what travels here is how to
   // combine them, not the picture itself.
@@ -215,6 +221,32 @@ export const BLEND_INDEX: Record<BlendMode, number> = {
   difference: 6,
 };
 
+/**
+ * What happens to everything that is not the subject.
+ *
+ * The mask itself is never part of the Look — it is a bitmap, and a recipe
+ * that carried one would stop fitting in a link. It is recomputed on the
+ * viewer's own machine when the Look is applied, which is the same bargain
+ * the photograph itself has always been under.
+ */
+export type CutoutMode = "off" | "blur" | "darken" | "mute" | "lift";
+
+export const CUTOUT_MODES: { key: CutoutMode; label: string; note: string }[] = [
+  { key: "off", label: "Off", note: "Leave the whole frame alone." },
+  { key: "blur", label: "Soften", note: "Throw the background out of focus, the way a longer lens would." },
+  { key: "darken", label: "Darken", note: "Sink the background so the subject carries the frame." },
+  { key: "mute", label: "Mute", note: "Take the colour out of the background and leave the subject in it." },
+  { key: "lift", label: "Lift", note: "Lighten the background instead, for a high-key cut." },
+];
+
+export const CUTOUT_INDEX: Record<CutoutMode, number> = {
+  off: 0,
+  blur: 1,
+  darken: 2,
+  mute: 3,
+  lift: 4,
+};
+
 export type TextFamily = "sans" | "serif" | "mono";
 
 /**
@@ -302,6 +334,9 @@ export function defaultParams(): LookParams {
     skinSmooth: 0,
     faceSpotlight: 0,
     eyeClarity: 0,
+    cutout: "off",
+    cutoutAmount: 0.7,
+    cutoutFeather: 0.35,
     blendMode: "off",
     blendOpacity: 0.55,
     blendScale: 1,

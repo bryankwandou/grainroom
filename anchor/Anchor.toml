@@ -5,10 +5,10 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-look_registry = "14a2jErBjHQv7fD64F6P1nLt6LXCsKgiyoi1c4mkyfaE"
+look_registry = "7kc9jwXoetCASZ3G8zF7z4si4C72KD3jza36MszyqFeC"
 
 [programs.localnet]
-look_registry = "14a2jErBjHQv7fD64F6P1nLt6LXCsKgiyoi1c4mkyfaE"
+look_registry = "7kc9jwXoetCASZ3G8zF7z4si4C72KD3jza36MszyqFeC"
 
 [registry]
 url = "https://api.apr.dev"

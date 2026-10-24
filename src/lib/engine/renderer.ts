@@ -4,6 +4,7 @@ import {
   MAX_SELECTIVE_POINTS,
   MAX_HEALS,
   BLEND_INDEX,
+  CUTOUT_INDEX,
   sourceToFrame,
   buildCurveLUT,
   expandFactor,
@@ -35,6 +36,10 @@ export class GrainroomRenderer {
   /** What the text texture currently holds, so it is not redrawn every frame. */
   private textKey = "";
   private textCanvas: HTMLCanvasElement | null = null;
+
+  private cutoutTex: WebGLTexture;
+  /** Whether a subject mask has been found for the photograph in hand. */
+  private hasCutout = false;
 
   private blendTex: WebGLTexture;
   /** Whether a second photograph has actually been handed over. */
@@ -95,10 +100,16 @@ export class GrainroomRenderer {
     this.textTex = createTexture(gl);
     this.paintTex = createTexture(gl);
     this.blendTex = createTexture(gl);
+    this.cutoutTex = createTexture(gl);
     // One transparent pixel each, so the composite pass always has something
     // valid bound whether or not the photo carries a caption, any painting,
     // or a second exposure.
-    for (const tex of [this.textTex, this.paintTex, this.blendTex]) {
+    for (const tex of [
+      this.textTex,
+      this.paintTex,
+      this.blendTex,
+      this.cutoutTex,
+    ]) {
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.texImage2D(
         gl.TEXTURE_2D,
@@ -161,6 +172,7 @@ export class GrainroomRenderer {
     gl.useProgram(this.progAdjust);
     this.bindTexture(this.progAdjust, "uImage", this.sourceTex, 0);
     this.bindTexture(this.progAdjust, "uCurves", this.curveTex, 1);
+    this.bindTexture(this.progAdjust, "uCutoutMask", this.cutoutTex, 2);
     this.setAdjustUniforms(params);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
@@ -244,6 +256,7 @@ export class GrainroomRenderer {
     gl.deleteTexture(this.textTex);
     gl.deleteTexture(this.paintTex);
     gl.deleteTexture(this.blendTex);
+    gl.deleteTexture(this.cutoutTex);
     gl.deleteProgram(this.progAdjust);
     gl.deleteProgram(this.progBlur);
     gl.deleteProgram(this.progComposite);
@@ -464,6 +477,42 @@ export class GrainroomRenderer {
     this.hasBlend = false;
   }
 
+  /**
+   * Takes the subject mask for the photograph currently loaded.
+   *
+   * Like the second frame of a double exposure, this is not part of the Look.
+   * It is a bitmap, and a recipe carrying one would stop fitting in a link —
+   * so it is found again on whichever machine the Look is applied on.
+   */
+  setCutoutMask(source: TexImageSource) {
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.cutoutTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    this.hasCutout = true;
+  }
+
+  clearCutoutMask() {
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.cutoutTex);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      1,
+      1,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      new Uint8Array([0, 0, 0, 255])
+    );
+    this.hasCutout = false;
+  }
+
+  get hasSubjectMask() {
+    return this.hasCutout;
+  }
+
   private uploadCurves(params: LookParams) {
     const gl = this.gl;
     const lut = buildCurveLUT(params);
@@ -491,6 +540,13 @@ export class GrainroomRenderer {
     gl.uniform4f(u("uColor"), p.saturation, p.vibrance, p.temperature, p.tint);
     gl.uniform4f(u("uSplit"), p.shadowHue, p.shadowSat, p.highlightHue, p.highlightSat);
     gl.uniform4f(u("uBW"), p.bwMix[0], p.bwMix[1], p.bwMix[2], p.bw ? 1 : 0);
+
+    // The mask rides out in the alpha channel, so it only needs to be read
+    // when there is one and the tool is actually doing something.
+    gl.uniform1i(
+      u("uCutoutOn"),
+      this.hasCutout && p.cutout !== "off" ? 1 : 0
+    );
 
     // Framing. The oriented size is the source with its axes swapped on an
     // odd number of quarter turns, which is what the crop rect is relative to.
@@ -551,6 +607,12 @@ export class GrainroomRenderer {
     gl.uniform3f(u("uPortrait"), p.skinSmooth, p.faceSpotlight, p.eyeClarity);
     gl.uniform1f(u("uTextOpacity"), p.text.trim() ? p.textOpacity : 0);
     gl.uniform1f(u("uPaintOn"), p.strokes.length ? 1 : 0);
+
+    // Without a mask there is no background to treat, and applying a mode
+    // anyway would darken the whole frame rather than half of it.
+    const cutting = this.hasCutout && p.cutout !== "off";
+    gl.uniform1i(u("uCutoutMode"), cutting ? CUTOUT_INDEX[p.cutout] : 0);
+    gl.uniform2f(u("uCutoutSet"), p.cutoutAmount, p.cutoutFeather);
 
     // A blend mode with no second photograph loaded would otherwise multiply
     // the picture by one transparent pixel and turn the frame black.

@@ -88,9 +88,17 @@ input, drags Exposure and checks the canvas actually changed, undoes it and
 checks the pixels came back, crops to a square and measures the frame, taps a
 selective point, paints a stroke, lays a second photograph over the first,
 clicks Save to device and confirms a real JPEG landed on disk. It also records
-every network request the page makes and fails if any of them leaves the
-origin — so "nothing is uploaded" is a condition the suite enforces rather than
-a sentence in this file.
+every network request the page makes, with the size of whatever it carried, and
+fails if any of them looks like a photograph — so "your picture is not
+uploaded" is a condition the suite enforces rather than a sentence in this file.
+
+Two hosts are contacted and both are named in that check rather than waved
+through. Devnet is asked whether a Look has been claimed, which is a lookup of
+a hash. And the first time Cut Out is used, the subject model's weights are
+fetched from the vendor's CDN, because they are 221 MB and serving that from
+this origin is not sensible. Both are downloads. The photograph is what may not
+move, and it does not: the largest thing this project has ever sent off-origin
+is a 192-byte hash.
 
 That one found "Back to the full frame" resetting crop and rotation but not
 expand or perspective, which left the button lit and the frame still altered.
@@ -128,10 +136,10 @@ Encoded base64url, a Look fits comfortably in a URL or a QR code.
 ## What runs today
 
 Tune Image, White Balance, Selective, Brush, Healing, Details, Dehaze, Lens
-Blur, Tonality, Grain, Glow, Split Tone, Double Exposure, Text, Colour HSL,
-Black & White, Crop & Rotate, Expand, Perspective, Portrait, Frames, and the
-curve engine. Export to JPEG, PNG or
-WebP at full resolution or a capped long edge.
+Blur, Tonality, Grain, Glow, Split Tone, Cut Out, Double Exposure, Text, Colour
+HSL, Black & White, Crop & Rotate, Expand, Perspective, Portrait, Frames, and
+the curve engine — twenty-three of them. RAW files are developed on open.
+Export to JPEG, PNG or WebP at full resolution or a capped long edge.
 
 Geometry — crop, quarter turns, straighten, keystone, expand — is folded into
 the first pass rather than run as a stage of its own, so the blur, grain and
@@ -151,22 +159,31 @@ renderers that agree most of the time.
 
 ## What does not yet
 
-Cut Out and RAW Develop. One needs a call out to a background removal service,
-which would break the promise that the editor works with nothing connected; the
-other needs a decoder that runs before the pipeline does, which is a different
-piece of work rather than another tool. Both are listed in the editor's tool
-panel with those reasons attached, because a roadmap you cannot see is a
-marketing document.
+Nothing. Both of the last two turned out to rest on a false premise.
 
-Double Exposure was on that list until it was reconsidered. The objection had
+Cut Out was refused because it seemed to need a background removal service, and
+a network call would break the promise that the editor works with nothing
+connected. It does not need one: the segmentation model runs here, in the
+browser, downloaded once and cached. The photograph is still never sent
+anywhere for a server to look at, which is the part that actually matters.
+
+RAW Develop was refused because a demosaic has to happen before the pipeline
+can touch anything. That is true, and it is now done by LibRaw compiled to
+WebAssembly, in a worker, on the same machine. Drop a .cr3 or a .nef and it is
+developed with the camera's own white balance and colour matrix, highlights
+clipped rather than invented, and automatic brightness off — exposure is a
+decision for the Tune Image slider, not one the decoder should make quietly
+first.
+
+The roadmap section stays in the interface even though it is empty. The next
+thing that cannot be built yet belongs there, in public, with the reason.
+
+Double Exposure was on that list too, until it was reconsidered. The objection had
 been that a Look cannot carry a second photograph — but a Look never carried the
 first one either. It describes what to do with pixels it is handed, and the
 second frame is chosen when the Look is applied, exactly as the first one is.
 What travels is the blend mode, strength, scale and position; the recipe still
 fits in a link.
-
-Cut Out will call the background removal service already running in
-[Removix](https://github.com/bryankwandou/removix-ai).
 
 ## The video
 

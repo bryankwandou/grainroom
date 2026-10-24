@@ -13,6 +13,7 @@
  */
 const fs = require("fs");
 const path = require("path");
+const { execFileSync } = require("child_process");
 const puppeteer = require("puppeteer-core");
 
 const BASE = process.env.BASE || "http://localhost:3000";
@@ -58,6 +59,9 @@ if (!PHOTO) {
   );
   process.exit(1);
 }
+
+/** The synthetic sensor file, built on demand rather than committed. */
+const DNG = path.join(outDir, "test.dng");
 
 let failures = 0;
 const results = [];
@@ -118,8 +122,11 @@ async function until(page, fn, { timeout = 25_000, step = 300 } = {}) {
 async function clickText(page, text, selector = "button") {
   const handle = await page.evaluateHandle(
     (sel, t) =>
+      // Case-insensitive: the panel tabs are written in lower case and
+      // capitalised by a stylesheet, so what a person reads as "Chain" is
+      // "chain" in the DOM.
       [...document.querySelectorAll(sel)].find(
-        (el) => el.textContent.trim() === t
+        (el) => el.textContent.trim().toLowerCase() === t.toLowerCase()
       ) || null,
     selector,
     text
@@ -150,14 +157,39 @@ async function clickText(page, text, selector = "button") {
   });
   page.on("pageerror", (e) => consoleErrors.push(String(e)));
 
-  // Anything the page sends to another host would show up here. The editor is
-  // supposed to send nothing at all.
+  // What the promise actually is: the photograph never leaves the machine.
+  // It is not that the page never touches the network — asking devnet whether
+  // a Look has been claimed is a lookup of a 64-character hash, and refusing
+  // to record that distinction would make this check either a lie or useless.
+  // So every off-origin request is recorded with the size of what it carried.
   const offsite = [];
+  const RPC = /(^|\.)solana\.com$/;
+  // The subject model's weights are 221 MB, which is too much to serve from
+  // this origin, so they come from the vendor's CDN the first time Cut Out is
+  // used and are cached by the browser after that. This is an allowance for
+  // a download, not for an upload: what may not happen is the photograph
+  // going anywhere, and that is checked separately and strictly below.
+  const MODEL_CDN = /(^|\.)staticimgly\.com$/;
   page.on("request", (r) => {
     const url = r.url();
-    if (!url.startsWith(BASE) && !url.startsWith("data:") && !url.startsWith("blob:")) {
-      offsite.push(`${r.method()} ${url}`);
+    if (url.startsWith(BASE) || url.startsWith("data:") || url.startsWith("blob:")) {
+      return;
     }
+    let host = "";
+    try {
+      host = new URL(url).hostname;
+    } catch {
+      host = url;
+    }
+    const body = r.postData() || "";
+    offsite.push({
+      host,
+      method: r.method(),
+      bytes: body.length,
+      looksLikeAnImage:
+        /data:image|"image\/|iVBORw0KGgo|\/9j\/4AAQ/.test(body),
+      allowed: RPC.test(host) || MODEL_CDN.test(host),
+    });
   });
 
   const cdp = await page.createCDPSession();
@@ -236,10 +268,26 @@ async function clickText(page, text, selector = "button") {
 
     const input = await page.$('input[type="file"]');
     check("there is a file input to load one with", Boolean(input));
-    await input.uploadFile(PHOTO);
-    const decoded = await until(page, () =>
-      /1500\s*×\s*938/.test(document.body.innerText)
-    );
+
+    // The markup arrives before React attaches to it. Handing a file to an
+    // input whose onChange is not wired yet does nothing at all, silently,
+    // and every check after it then fails for a reason that has nothing to
+    // do with the tool it names. Waiting for the canvas to exist is the
+    // cheapest evidence that the editor is actually running.
+    await page.waitForSelector("main canvas", { timeout: 60_000 });
+    await wait(1200);
+
+    // A second attempt costs a few seconds and covers the case where the
+    // first one landed a moment too early on a cold dev server.
+    let decoded = false;
+    for (let attempt = 0; attempt < 2 && !decoded; attempt++) {
+      await input.uploadFile(PHOTO);
+      decoded = await until(
+        page,
+        () => /1500\s*×\s*938/.test(document.body.innerText),
+        { timeout: 30_000 }
+      );
+    }
     await wait(700);
     await page.screenshot({ path: path.join(shotDir, "03-loaded.png") });
 
@@ -410,6 +458,242 @@ async function clickText(page, text, selector = "button") {
       `still ${distance(beforeBlend, removed).toFixed(1)} away`
     );
 
+    /* ------------------------- cut out ------------------------- */
+    // The model runs on this machine. First use downloads weights, which is
+    // slow in a cold browser profile, so this waits minutes rather than
+    // seconds before deciding it has failed.
+    await clickText(page, "Cut Out");
+    await wait(500);
+    const beforeCut = await signature(page);
+
+    await clickText(page, "Find the subject");
+    const found = await until(
+      page,
+      () => {
+        const t = document.body.innerText;
+        return /Find the subject again/.test(t) || /could not/i.test(t);
+      },
+      { timeout: 240_000, step: 1000 }
+    );
+    const cutFailed = await page.evaluate(() =>
+      /could not|model could not/i.test(document.body.innerText)
+    );
+    check(
+      "the subject is found on this machine",
+      found && !cutFailed,
+      cutFailed ? "the editor reported it could not" : "timed out"
+    );
+
+    if (found && !cutFailed) {
+      await wait(1500);
+
+      // Soften is the default because it is the one people want, but it is a
+      // poor thing to assert on: blurring a smooth sky changes almost nothing,
+      // and the check would be measuring the photograph rather than the tool.
+      // Darken cannot be subtle.
+      await clickText(page, "Darken");
+      await wait(1200);
+      const darkened = await signature(page);
+      check(
+        "separating the subject changes the background",
+        distance(beforeCut, darkened) > 1.5,
+        `moved ${distance(beforeCut, darkened).toFixed(1)}`
+      );
+
+      await clickText(page, "Mute");
+      await wait(1000);
+      const muted = await signature(page);
+      check(
+        "a different background treatment gives a different result",
+        distance(darkened, muted) > 1.5,
+        `moved ${distance(darkened, muted).toFixed(1)}`
+      );
+      await page.screenshot({ path: path.join(shotDir, "09-cutout.png") });
+
+      await clickText(page, "Forget");
+      await wait(900);
+    }
+
+    /* ------------------- every remaining tool ------------------- */
+    // One pass over the tools that work by moving a slider. Each one has to
+    // change the picture: a tool that mounts, accepts input and renders
+    // nothing is the failure this catches, and it is invisible to a
+    // typechecker because every part of it is individually correct.
+    const SWEEP = [
+      "White Balance",
+      "Details",
+      "Dehaze",
+      "Lens Blur",
+      "Tonality",
+      "Grain",
+      "Glow",
+      "Split Tone",
+      "Expand",
+      "Portrait",
+      "Frames",
+      "Perspective",
+    ];
+
+    for (const name of SWEEP) {
+      await clickText(page, name);
+      await wait(350);
+      const before = await signature(page);
+
+      // Push every slider in the open panel well off its neutral, the way a
+      // person testing a tool would rather than nudging it.
+      const moved = await page.evaluate(() => {
+        const panel = document.querySelector("aside") || document.body;
+        const sliders = [...panel.querySelectorAll('input[type="range"]')];
+        if (!sliders.length) return 0;
+        const setter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype,
+          "value"
+        ).set;
+        for (const el of sliders) {
+          const min = Number(el.min || 0);
+          const max = Number(el.max || 1);
+          setter.call(el, String(min + (max - min) * 0.85));
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        return sliders.length;
+      });
+
+      await wait(900);
+      const after = await signature(page);
+      check(
+        `${name} changes the picture`,
+        moved > 0 && distance(before, after) > 1.5,
+        moved === 0
+          ? "no sliders in the panel"
+          : `${moved} sliders, moved ${distance(before, after).toFixed(1)}`
+      );
+    }
+
+    // Colour HSL works on one band of hue at a time, so pushing whichever
+    // band happens to be selected proves nothing about a photograph that has
+    // little of that colour in it. Each band gets a turn.
+    await clickText(page, "Colour HSL");
+    await wait(400);
+    let bestBand = 0;
+    let bandName = "";
+    for (const band of ["Red", "Orange", "Yellow", "Green", "Blue"]) {
+      const picked = await page.evaluate((b) => {
+        const el = [...document.querySelectorAll("button")].find(
+          (x) => x.textContent.trim() === b
+        );
+        if (!el) return false;
+        el.click();
+        return true;
+      }, band);
+      if (!picked) continue;
+      await wait(300);
+      const before = await signature(page);
+      await page.evaluate(() => {
+        const setter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype,
+          "value"
+        ).set;
+        for (const el of document.querySelectorAll(
+          'aside input[type="range"]'
+        )) {
+          const min = Number(el.min || 0);
+          const max = Number(el.max || 1);
+          setter.call(el, String(min + (max - min) * 0.9));
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      });
+      await wait(800);
+      const moved = distance(before, await signature(page));
+      if (moved > bestBand) {
+        bestBand = moved;
+        bandName = band;
+      }
+    }
+    check(
+      "Colour HSL changes the picture, in whichever band the photo has",
+      bestBand > 1.5,
+      `best was ${bandName || "none"} at ${bestBand.toFixed(1)}`
+    );
+
+    await page.screenshot({ path: path.join(shotDir, "10-swept.png") });
+
+    /* ------------------------- black and white ------------------------- */
+    await clickText(page, "Black & White");
+    await wait(400);
+    const beforeBW = await signature(page);
+    // The filter presets are deliberately disabled until the conversion is
+    // switched on — a colour filter over colour film means nothing — so the
+    // checkbox goes first.
+    const bwOn = await page.evaluate(() => {
+      const box = document.querySelector('aside input[type="checkbox"]');
+      if (!box) return false;
+      box.click();
+      return true;
+    });
+    await wait(700);
+    await page.evaluate(() => {
+      const b = [...document.querySelectorAll("button")].find(
+        (el) => el.textContent.trim() === "Red filter"
+      );
+      if (b) b.click();
+    });
+    await wait(900);
+    const afterBW = await signature(page);
+    check(
+      "Black & White drains the colour",
+      bwOn && distance(beforeBW, afterBW) > 1.5,
+      bwOn ? `moved ${distance(beforeBW, afterBW).toFixed(1)}` : "no filter button"
+    );
+
+    /* ------------------------- a caption ------------------------- */
+    await clickText(page, "Text");
+    await wait(400);
+    const beforeText = await signature(page);
+    const typed = await page.evaluate(() => {
+      const t = document.querySelector("textarea");
+      if (!t) return false;
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype,
+        "value"
+      ).set;
+      setter.call(t, "PROOF");
+      t.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    });
+    await wait(1200);
+    const afterText = await signature(page);
+    check(
+      "a caption is drawn onto the photograph",
+      typed && distance(beforeText, afterText) > 0.8,
+      typed ? `moved ${distance(beforeText, afterText).toFixed(1)}` : "no textarea"
+    );
+
+    /* ------------------------- the ledger ------------------------- */
+    // The chain side has to work from the interface, not only from a script.
+    await clickText(page, "Chain");
+    const hashed = await until(
+      page,
+      () => /[0-9a-f]{8}/.test(document.body.innerText),
+      { timeout: 30_000 }
+    );
+    check("the Look is hashed for publishing", hashed);
+
+    const registry = await until(
+      page,
+      () =>
+        !/Checking the registry program/i.test(document.body.innerText),
+      { timeout: 40_000 }
+    );
+    const chainText = await page.evaluate(() => document.body.innerText);
+    check(
+      "the registry program on devnet is reached",
+      registry && !/not yet live|not answering/i.test(chainText),
+      chainText.slice(0, 160),
+    );
+    await page.screenshot({ path: path.join(shotDir, "11-chain.png") });
+
     /* ------------------------- export ------------------------- */
     await clickText(page, "Export");
     await wait(800);
@@ -425,11 +709,100 @@ async function clickText(page, text, selector = "button") {
     );
     await page.screenshot({ path: path.join(shotDir, "09-export.png") });
 
-    /* ------------------------- the promise ------------------------- */
+    /* --------------------- a raw file --------------------- */
+    // Last, because opening one replaces the photograph everything above was
+    // working on. The file is generated rather than committed: camera files
+    // are large and belong to whoever pressed the shutter, and a synthetic
+    // sensor has the advantage that the right answer is known in advance —
+    // red photosites bright on the left, blue bright on the right.
+    if (!fs.existsSync(DNG)) {
+      execFileSync(process.execPath, [path.join(__dirname, "make-test-dng.js"), DNG], {
+        stdio: "ignore",
+      });
+    }
+
+    // A Look deliberately outlives the photograph it was built on — that is
+    // how one recipe gets applied across a set of frames. It means the RAW
+    // file would arrive wearing everything above it, including the black and
+    // white conversion, which would make any statement about colour a
+    // statement about the previous forty checks. So: a clean editor.
+    await page.goto(`${BASE}/edit`, {
+      waitUntil: "domcontentloaded",
+      timeout: 90_000,
+    });
+    await page.waitForSelector("main canvas", { timeout: 60_000 });
+    await wait(1500);
+
+    const rawInput = await page.$('input[type="file"]');
+    await rawInput.uploadFile(DNG);
+    const developed = await until(
+      page,
+      () => /64\s*×\s*48/.test(document.body.innerText),
+      { timeout: 120_000, step: 1000 }
+    );
     check(
-      "nothing was sent to another host",
-      offsite.length === 0,
-      offsite.slice(0, 3).join(" / ")
+      "a RAW file is developed and opened",
+      developed,
+      (await page.evaluate(() => document.body.innerText)).slice(0, 120)
+    );
+
+    if (developed) {
+      await wait(1200);
+      await page.screenshot({ path: path.join(shotDir, "12-raw.png") });
+      const halves = await page.evaluate(() => {
+        const el = document.querySelector("main canvas");
+        const s = document.createElement("canvas");
+        s.width = 64;
+        s.height = 48;
+        const ctx = s.getContext("2d");
+        ctx.drawImage(el, 0, 0, 64, 48);
+        const read = (x) => {
+          const d = ctx.getImageData(x, 8, 16, 32).data;
+          let r = 0, b = 0;
+          for (let i = 0; i < d.length; i += 4) {
+            r += d[i];
+            b += d[i + 2];
+          }
+          const n = d.length / 4;
+          return { r: r / n, b: b / n };
+        };
+        return { left: read(8), right: read(40) };
+      });
+
+      check(
+        "the demosaic put the colours where the sensor recorded them",
+        halves.left.r > halves.left.b && halves.right.b > halves.right.r,
+        `left r=${halves.left.r.toFixed(0)} b=${halves.left.b.toFixed(0)}, ` +
+          `right r=${halves.right.r.toFixed(0)} b=${halves.right.b.toFixed(0)}`
+      );
+    }
+
+    /* ------------------------- the promise ------------------------- */
+    const strangers = offsite.filter((r) => !r.allowed);
+    check(
+      "the only other hosts are the ledger and the model download",
+      strangers.length === 0,
+      strangers.map((r) => `${r.method} ${r.host}`).slice(0, 3).join(" / ")
+    );
+
+    const carriedPixels = offsite.filter(
+      (r) => r.looksLikeAnImage || r.bytes > 8192
+    );
+    check(
+      "the photograph never left the machine",
+      carriedPixels.length === 0,
+      carriedPixels
+        .map((r) => `${r.host} carried ${r.bytes} bytes`)
+        .slice(0, 3)
+        .join(" / ")
+    );
+
+    const rpc = offsite.filter((r) => r.allowed);
+    console.log(
+      `      (${rpc.length} devnet lookups, largest ${Math.max(
+        0,
+        ...rpc.map((r) => r.bytes)
+      )} bytes — a Look hash, not a picture)`
     );
     check(
       "the browser logged no errors while all that happened",

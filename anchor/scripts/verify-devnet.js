@@ -28,7 +28,7 @@ const {
   LAMPORTS_PER_SOL,
 } = require("@solana/web3.js");
 
-const PROGRAM_ID = new PublicKey("14a2jErBjHQv7fD64F6P1nLt6LXCsKgiyoi1c4mkyfaE");
+const PROGRAM_ID = new PublicKey("7kc9jwXoetCASZ3G8zF7z4si4C72KD3jza36MszyqFeC");
 const RPC = process.env.RPC_URL || "https://api.devnet.solana.com";
 
 const keypairPath =

@@ -248,6 +248,16 @@ export const TOOLS: Tool[] = [
     ],
   },
   {
+    id: "cut-out",
+    name: "Cut Out",
+    group: "portrait",
+    blurb: "Separate the subject from the background, and treat them apart.",
+    sliders: [
+      pct("cutoutAmount", "Strength", "How far the background is pushed back.", [0, 1]),
+      pct("cutoutFeather", "Edge", "A softer edge for hair and fur; a harder one for glass and metal.", [0, 1]),
+    ],
+  },
+  {
     id: "double-exposure",
     name: "Double Exposure",
     group: "creative",
@@ -404,24 +414,14 @@ export const TOOLS: Tool[] = [
 export const TOOLS_BY_ID = new Map(TOOLS.map((t) => [t.id, t]));
 
 /**
- * What is left, and why each one is left.
+ * What is left.
  *
- * All three need something a Look cannot carry today: a network call, a
- * second photograph, or a decoder that has to run before any of this does.
- * They are listed rather than hidden because a roadmap nobody can see is a
- * marketing document.
+ * Nothing, as of the release that added Cut Out and RAW develop. The list is
+ * kept rather than deleted: the next thing that cannot be built yet belongs
+ * here, in the interface, rather than in a private backlog. A roadmap nobody
+ * can see is a marketing document.
  */
 export const ROADMAP_TOOLS: { name: string; group: ToolGroup; note: string }[] = [
-  {
-    name: "Cut Out",
-    group: "portrait",
-    note: "Needs the Removix service, so it cannot run offline",
-  },
-  {
-    name: "RAW Develop",
-    group: "tune",
-    note: "Needs a demosaic step ahead of the pipeline",
-  },
 ];
 
 /* ------------------------------------------------------------------ */

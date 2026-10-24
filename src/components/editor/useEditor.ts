@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GrainroomRenderer } from "@/lib/engine/renderer";
+import { developRaw, looksLikeRaw } from "@/lib/raw";
 import {
   defaultParams,
   encodeLook,
@@ -50,6 +51,12 @@ export function useEditor() {
   // lives on the renderer rather than in the Look: the Look says how to
   // combine two frames, the same way it never carried the first one either.
   const [hasBlendImage, setHasBlendImage] = useState(false);
+
+  // The subject mask and how far along finding it is. The model runs here on
+  // this machine; the photograph is not sent anywhere to be looked at.
+  const [hasSubject, setHasSubject] = useState(false);
+  const [subjectProgress, setSubjectProgress] = useState<string | null>(null);
+  const sourceFileRef = useRef<File | null>(null);
 
   const [displaySize, setDisplaySize] = useState<{ w: number; h: number } | null>(
     null
@@ -147,15 +154,27 @@ export function useEditor() {
   const loadFile = useCallback(
     async (file: File) => {
       setError(null);
-      if (!file.type.startsWith("image/")) {
+      const raw = looksLikeRaw(file);
+      if (!raw && !file.type.startsWith("image/")) {
         setError("That file is not an image this browser can decode.");
         return;
       }
       try {
-        const bitmap = await createImageBitmap(file, {
-          // Honour the camera's orientation tag so portraits are not sideways.
-          imageOrientation: "from-image",
-        });
+        let bitmap: ImageBitmap;
+        if (raw) {
+          // A RAW file is not a picture yet, so it goes through the decoder
+          // before anything else can touch it. This runs here, in a worker on
+          // this machine, and can take a few seconds on a large sensor.
+          setSubjectProgress("Developing the RAW file…");
+          const developed = await developRaw(file);
+          bitmap = developed.bitmap;
+          setSubjectProgress(null);
+        } else {
+          bitmap = await createImageBitmap(file, {
+            // Honour the camera's orientation tag so portraits are not sideways.
+            imageOrientation: "from-image",
+          });
+        }
         const r = rendererRef.current;
         if (!r) {
           setError("The renderer is not ready yet.");
@@ -164,14 +183,25 @@ export function useEditor() {
         r.setImage(bitmap, bitmap.width, bitmap.height);
         bitmap.close();
 
+        sourceFileRef.current = file;
+        // A different photograph means the old mask describes the wrong
+        // subject, so it goes rather than quietly staying behind.
+        r.clearCutoutMask();
+        setHasSubject(false);
         setImageName(file.name);
         setImageSize({ w: r.width, h: r.height });
         setIsReady(true);
         // A new photo starts clean, but the Look in hand is kept — that is
         // how you apply one recipe across a set of frames.
         scheduleDraw();
-      } catch {
-        setError("This image could not be decoded. Try a JPEG or PNG.");
+      } catch (e) {
+        setSubjectProgress(null);
+        setError(
+          raw
+            ? "This RAW file could not be developed. Some very new camera models are not supported yet."
+            : "This image could not be decoded. Try a JPEG or PNG."
+        );
+        void e;
       }
     },
     [scheduleDraw]
@@ -257,6 +287,53 @@ export function useEditor() {
     bitmap.close();
     setHasBlendImage(true);
   }, []);
+
+  /**
+   * Finds the subject, on this machine.
+   *
+   * The model is fetched once and cached by the browser; after that this
+   * works with the network off. What never happens, at any point, is the
+   * photograph being sent somewhere for a server to look at.
+   */
+  const findSubject = useCallback(async () => {
+    const r = rendererRef.current;
+    const file = sourceFileRef.current;
+    if (!r || !file) return false;
+    setSubjectProgress("Loading the model…");
+    try {
+      const { removeBackground } = await import("@imgly/background-removal");
+      const cut = await removeBackground(file, {
+        output: { format: "image/png", quality: 0.9 },
+        progress: (key: string, current: number, total: number) => {
+          const pct = total ? Math.round((current / total) * 100) : 0;
+          setSubjectProgress(
+            key.startsWith("fetch") ? `Loading the model… ${pct}%` : "Finding the subject…"
+          );
+        },
+      });
+      const bitmap = await createImageBitmap(cut);
+      r.setCutoutMask(bitmap);
+      bitmap.close();
+      setHasSubject(true);
+      setSubjectProgress(null);
+      scheduleDraw();
+      return true;
+    } catch (e) {
+      setSubjectProgress(null);
+      setError(
+        e instanceof Error && /fetch|network/i.test(e.message)
+          ? "The subject model could not be downloaded. It is needed once, then Cut Out works offline."
+          : "The subject could not be separated from this photograph."
+      );
+      return false;
+    }
+  }, [scheduleDraw]);
+
+  const clearSubject = useCallback(() => {
+    rendererRef.current?.clearCutoutMask();
+    setHasSubject(false);
+    scheduleDraw();
+  }, [scheduleDraw]);
 
   const clearBlendImage = useCallback(() => {
     rendererRef.current?.clearBlendImage();
@@ -378,6 +455,10 @@ export function useEditor() {
     hasBlendImage,
     loadBlendFile,
     clearBlendImage,
+    hasSubject,
+    subjectProgress,
+    findSubject,
+    clearSubject,
     isReady,
     error,
     clearError: () => setError(null),

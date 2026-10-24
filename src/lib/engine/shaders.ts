@@ -64,6 +64,13 @@ out vec4 fragColor;
 uniform sampler2D uImage;
 uniform sampler2D uCurves;   // 256x1 LUT: rgb = per-channel, a = composite
 
+// The subject mask, found on this machine by a model that never sees the
+// network. It is sampled in the photograph's own coordinates and handed on in
+// the alpha channel, so it is cropped, turned and keystoned by exactly the
+// same maths as the picture rather than by a second copy of it.
+uniform sampler2D uCutoutMask;
+uniform int uCutoutOn;
+
 uniform vec4 uTone;    // exposure, contrast, highlights, shadows
 uniform vec4 uTone2;   // whites, blacks, fade, ambiance
 uniform vec4 uColor;   // saturation, vibrance, temperature, tint
@@ -300,7 +307,8 @@ void main() {
     c = vec3(dot(c, w));
   }
 
-  fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+  float subject = uCutoutOn > 0 ? texture(uCutoutMask, suv).a : 1.0;
+  fragColor = vec4(clamp(c, 0.0, 1.0), subject);
 }`;
 
 export const FRAG_BLUR = /* glsl */ `#version 300 es
@@ -366,6 +374,10 @@ uniform vec3 uPortrait;  // skin smoothing, face spotlight, eye clarity
 uniform float uTextOpacity;
 uniform float uPaintOn;
 
+// What to do with everything that is not the subject, and how hard.
+uniform int uCutoutMode;
+uniform vec2 uCutoutSet;   // amount, then how softly the edge falls off
+
 ${COLOR_LIB}
 
 /** Cheap value noise. Deterministic per seed so a Look always replays identically. */
@@ -379,7 +391,9 @@ void main() {
   // Both of these are render targets, so they are read the other way up from
   // the caption and the paint mask, which arrive as ordinary images.
   vec2 tUV = vec2(vUV.x, 1.0 - vUV.y);
-  vec3 sharp = texture(uImage, tUV).rgb;
+  vec4 base = texture(uImage, tUV);
+  vec3 sharp = base.rgb;
+  float subject = base.a;
   vec3 blur = texture(uBlur, tUV).rgb;
   vec3 c = sharp;
 
@@ -486,6 +500,24 @@ void main() {
     // Film grain is strongest in the midtones, nearly absent in pure black.
     float shape = 1.0 - abs(luma(c) - 0.45) * 1.2;
     c += n * uFx.z * 0.28 * clamp(shape, 0.15, 1.0);
+  }
+
+  // --- cut out ---
+  // Ahead of the double exposure, so a second frame lands on the finished
+  // cut rather than being separated from the subject by it.
+  if (uCutoutMode > 0) {
+    // A hard edge on a soft subject is the usual tell that something was
+    // pasted, so the ramp widens with the feather setting.
+    float f = mix(0.02, 0.45, uCutoutSet.y);
+    float keep = smoothstep(0.5 - f, 0.5 + f, subject);
+    float hit = (1.0 - keep) * uCutoutSet.x;
+
+    vec3 back = c;
+    if (uCutoutMode == 1)      back = blur;
+    else if (uCutoutMode == 2) back = c * 0.35;
+    else if (uCutoutMode == 3) back = vec3(luma(c));
+    else if (uCutoutMode == 4) back = mix(c, vec3(1.0), 0.55);
+    c = mix(c, back, hit);
   }
 
   // --- double exposure ---
